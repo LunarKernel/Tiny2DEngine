@@ -21,7 +21,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(SDL2 CONFIG REQUIRED)
 
 add_library(Tiny2DEngine STATIC
-    Engine/Tiny2DEngine.cpp
+    Engine/tiny2d_engine.cc
 )
 
 target_include_directories(Tiny2DEngine PUBLIC
@@ -31,7 +31,7 @@ target_include_directories(Tiny2DEngine PUBLIC
 target_link_libraries(Tiny2DEngine PUBLIC SDL2::SDL2)
 
 add_executable(Sandbox
-    Sandbox/main.cpp
+    Sandbox/main.cc
 )
 
 target_link_libraries(Sandbox PRIVATE
