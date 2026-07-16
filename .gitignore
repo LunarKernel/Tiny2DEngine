@@ -1,0 +1,19 @@
+build/
+vcpkg_installed/
+*.exe
+
+# VS Code temporary files
+.vscode/.browse.VC.db*
+.vscode/ipch/
+.vscode/*.log
+.history/
+.vs/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+Makefile
+*.ninja
+.ninja_*
