@@ -1,13 +1,11 @@
 #define SDL_MAIN_HANDLED
-#define main Tiny2DSandboxApplicationMain
-#include "main.cc"
-#undef main
-
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <random>
 #include <string>
+
+#include "incline_spring_simulation.cc"
 
 namespace {
 

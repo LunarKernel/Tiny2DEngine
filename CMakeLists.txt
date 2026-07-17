@@ -42,6 +42,8 @@ tiny2d_enable_warnings(Tiny2DEngine)
 
 add_executable(Sandbox WIN32
     Sandbox/main.cc
+    Sandbox/incline_spring_simulation.cc
+    Sandbox/rotation_pendulum_simulation.cc
 )
 
 target_link_libraries(Sandbox PRIVATE
@@ -63,9 +65,8 @@ tiny2d_enable_warnings(Tiny2DEngineTests)
 add_test(NAME Tiny2DEngineTests COMMAND Tiny2DEngineTests)
 set_tests_properties(Tiny2DEngineTests PROPERTIES TIMEOUT 30)
 
-# Test the exact headless model helpers used by the SDL application. The test
-# translation unit includes main.cc with its entry point renamed, avoiding a
-# second copy of the calibration and transition formulas.
+# Test the exact headless V9 model helpers used by the SDL application. The
+# test translation unit includes the implementation to avoid copying formulas.
 add_executable(Tiny2DSimulationTests
     Sandbox/simulation_model_test.cc
 )
@@ -79,3 +80,17 @@ tiny2d_enable_warnings(Tiny2DSimulationTests)
 
 add_test(NAME Tiny2DSimulationTests COMMAND Tiny2DSimulationTests)
 set_tests_properties(Tiny2DSimulationTests PROPERTIES TIMEOUT 30)
+
+add_executable(Tiny2DRotationPendulumTests
+    Sandbox/rotation_pendulum_test.cc
+)
+
+target_link_libraries(Tiny2DRotationPendulumTests PRIVATE
+    SDL2::SDL2
+    Tiny2DEngine
+    imgui::imgui
+)
+tiny2d_enable_warnings(Tiny2DRotationPendulumTests)
+
+add_test(NAME Tiny2DRotationPendulumTests COMMAND Tiny2DRotationPendulumTests)
+set_tests_properties(Tiny2DRotationPendulumTests PROPERTIES TIMEOUT 30)
