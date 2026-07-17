@@ -17,7 +17,6 @@ constexpr float kSupportEpsilon = 0.0001f;
 constexpr float kPositionSlop = 0.01f;
 constexpr float kPositionCorrection = 0.8f;
 constexpr float kRestitutionVelocityThreshold = 20.0f;
-constexpr float kFrictionCoefficient = 0.4f;
 constexpr float kAngularDamping = 0.7f;
 constexpr int kSolverIterations = 4;
 
@@ -80,7 +79,7 @@ float InverseMass(const Square& square) {
 }
 
 float InverseInertia(const Square& square) {
-  if (square.mass <= 0.0f || square.size <= 0.0f) {
+  if (square.fixed_rotation || square.mass <= 0.0f || square.size <= 0.0f) {
     return 0.0f;
   }
   return 6.0f / (square.mass * square.size * square.size);
@@ -333,20 +332,20 @@ std::optional<ContactManifold> FindContact(const Square& square_a,
   return manifold;
 }
 
-float Restitution(float coefficient, float normal_velocity,
+float Restitution(float restitution, float normal_velocity,
                   bool allow_restitution) {
   if (!allow_restitution ||
       std::abs(normal_velocity) < kRestitutionVelocityThreshold) {
     return 0.0f;
   }
-  return std::clamp(coefficient, 0.0f, 1.0f);
+  return std::clamp(restitution, 0.0f, 1.0f);
 }
 
 std::array<float, 2> ResolveNormalImpulses(Square& square_a, Square& square_b,
                                            const ContactManifold& manifold,
                                            const std::array<Vec2, 2>& radii_a,
                                            const std::array<Vec2, 2>& radii_b,
-                                           float coefficient,
+                                           float restitution,
                                            bool allow_restitution) {
   std::array<float, 2> normal_impulses{};
   std::array<float, 2> target_velocities{};
@@ -359,7 +358,7 @@ std::array<float, 2> ResolveNormalImpulses(Square& square_a, Square& square_b,
     initial_velocities[i] = Dot(relative_velocity, manifold.normal);
     if (initial_velocities[i] < 0.0f) {
       target_velocities[i] =
-          -Restitution(coefficient, initial_velocities[i], allow_restitution) *
+          -Restitution(restitution, initial_velocities[i], allow_restitution) *
           initial_velocities[i];
     }
   }
@@ -426,8 +425,8 @@ std::array<float, 2> ResolveNormalImpulses(Square& square_a, Square& square_b,
 }
 
 void ResolveContact(Square& square_a, Square& square_b,
-                    const ContactManifold& manifold, float coefficient,
-                    bool allow_restitution) {
+                    const ContactManifold& manifold, float restitution,
+                    float friction, bool allow_restitution) {
   const float inverse_mass_a = InverseMass(square_a);
   const float inverse_mass_b = InverseMass(square_b);
   const float inverse_mass_sum = inverse_mass_a + inverse_mass_b;
@@ -443,7 +442,7 @@ void ResolveContact(Square& square_a, Square& square_b,
   }
   const std::array<float, 2> normal_impulses =
       ResolveNormalImpulses(square_a, square_b, manifold, radii_a, radii_b,
-                            coefficient, allow_restitution);
+                            restitution, allow_restitution);
 
   for (std::size_t i = 0; i < manifold.point_count; ++i) {
     if (normal_impulses[i] <= 0.0f) {
@@ -460,7 +459,8 @@ void ResolveContact(Square& square_a, Square& square_b,
       const float denominator =
           ImpulseDenominator(square_a, radii_a[i], tangent) +
           ImpulseDenominator(square_b, radii_b[i], tangent);
-      const float maximum_friction = kFrictionCoefficient * normal_impulses[i];
+      const float maximum_friction =
+          std::max(friction, 0.0f) * normal_impulses[i];
       const float friction_magnitude =
           std::clamp(-Dot(relative_velocity, tangent) / denominator,
                      -maximum_friction, maximum_friction);
@@ -481,7 +481,8 @@ void ResolveContact(Square& square_a, Square& square_b,
 }
 
 void ResolveWallContact(Square& square, Vec2 inward_normal, float offset,
-                        float coefficient, bool allow_restitution) {
+                        float restitution, float friction,
+                        bool allow_restitution) {
   const std::array<Vec2, 4> vertices = GetVertices(square);
   const Projection projection = Project(vertices, inward_normal);
   if (projection.minimum >= offset) {
@@ -508,7 +509,7 @@ void ResolveWallContact(Square& square, Vec2 inward_normal, float offset,
   if (normal_velocity < 0.0f) {
     const float denominator = ImpulseDenominator(square, radius, inward_normal);
     normal_impulse_magnitude =
-        -(1.0f + Restitution(coefficient, normal_velocity, allow_restitution)) *
+        -(1.0f + Restitution(restitution, normal_velocity, allow_restitution)) *
         normal_velocity / denominator;
     ApplyImpulse(square, Multiply(inward_normal, normal_impulse_magnitude),
                  radius);
@@ -522,7 +523,7 @@ void ResolveWallContact(Square& square, Vec2 inward_normal, float offset,
     if (LengthSquared(tangent_velocity) > 0.0f) {
       const Vec2 tangent = Normalize(tangent_velocity);
       const float maximum_friction =
-          kFrictionCoefficient * normal_impulse_magnitude;
+          std::max(friction, 0.0f) * normal_impulse_magnitude;
       const float friction_magnitude =
           std::clamp(-Dot(contact_velocity, tangent) /
                          ImpulseDenominator(square, radius, tangent),
@@ -536,14 +537,15 @@ void ResolveWallContact(Square& square, Vec2 inward_normal, float offset,
 }
 
 void ResolveWindowCollision(Square& square, float area_width, float area_height,
-                            float coefficient, bool allow_restitution) {
-  ResolveWallContact(square, {1.0f, 0.0f}, 0.0f, coefficient,
+                            float restitution, float friction,
+                            bool allow_restitution) {
+  ResolveWallContact(square, {1.0f, 0.0f}, 0.0f, restitution, friction,
                      allow_restitution);
-  ResolveWallContact(square, {-1.0f, 0.0f}, -area_width, coefficient,
+  ResolveWallContact(square, {-1.0f, 0.0f}, -area_width, restitution, friction,
                      allow_restitution);
-  ResolveWallContact(square, {0.0f, 1.0f}, 0.0f, coefficient,
+  ResolveWallContact(square, {0.0f, 1.0f}, 0.0f, restitution, friction,
                      allow_restitution);
-  ResolveWallContact(square, {0.0f, -1.0f}, -area_height, coefficient,
+  ResolveWallContact(square, {0.0f, -1.0f}, -area_height, restitution, friction,
                      allow_restitution);
 }
 
@@ -571,17 +573,23 @@ bool IsColliding(const Square& square_a, const Square& square_b) {
 }
 
 void Update(std::vector<Square>& squares, float delta_time, float area_width,
-            float area_height, float coefficient) {
+            float area_height, float restitution, float friction) {
   for (Square& square : squares) {
     if (InverseMass(square) == 0.0f) {
       continue;
     }
     square.velocity.y += kGravity * delta_time;
-    square.angular_velocity *= std::exp(-kAngularDamping * delta_time);
+    if (square.fixed_rotation) {
+      square.angular_velocity = 0.0f;
+    } else {
+      square.angular_velocity *= std::exp(-kAngularDamping * delta_time);
+    }
     square.position =
         Add(square.position, Multiply(square.velocity, delta_time));
-    square.angle = std::remainder(
-        square.angle + square.angular_velocity * delta_time, kTwoPi);
+    if (!square.fixed_rotation) {
+      square.angle = std::remainder(
+          square.angle + square.angular_velocity * delta_time, kTwoPi);
+    }
   }
 
   for (int iteration = 0; iteration < kSolverIterations; ++iteration) {
@@ -591,15 +599,15 @@ void Update(std::vector<Square>& squares, float delta_time, float area_width,
         const std::optional<ContactManifold> contact =
             FindContact(squares[i], squares[j]);
         if (contact.has_value()) {
-          ResolveContact(squares[i], squares[j], *contact, coefficient,
-                         allow_restitution);
+          ResolveContact(squares[i], squares[j], *contact, restitution,
+                         friction, allow_restitution);
         }
       }
     }
 
     for (Square& square : squares) {
-      ResolveWindowCollision(square, area_width, area_height, coefficient,
-                             allow_restitution);
+      ResolveWindowCollision(square, area_width, area_height, restitution,
+                             friction, allow_restitution);
     }
   }
 }

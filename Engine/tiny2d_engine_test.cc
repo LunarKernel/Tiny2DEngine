@@ -63,12 +63,16 @@ void TestAngularDampingReducesRotation() {
   assert(squares[0].angular_velocity < 10.0f);
 }
 
-void TestWallFrictionReducesTangentialSpeed() {
-  std::vector<tiny2d::Square> squares = {
+void TestConfigurableWallFriction() {
+  std::vector<tiny2d::Square> no_friction = {
       {1.0f, {100.0f, 19.0f}, {10.0f, -10.0f}, 0.0f, 0.0f, 40.0f},
   };
-  tiny2d::Update(squares, 0.0f, 1000.0f, 1000.0f, 1.0f);
-  assert(std::abs(squares[0].velocity.x) < 10.0f);
+  std::vector<tiny2d::Square> with_friction = no_friction;
+  tiny2d::Update(no_friction, 0.0f, 1000.0f, 1000.0f, 1.0f, 0.0f);
+  tiny2d::Update(with_friction, 0.0f, 1000.0f, 1000.0f, 1.0f, 0.4f);
+  assert(std::abs(no_friction[0].velocity.x - 10.0f) < kTolerance);
+  assert(std::abs(with_friction[0].velocity.x) <
+         std::abs(no_friction[0].velocity.x));
 }
 
 void TestStaticSquareDoesNotMove() {
@@ -100,6 +104,47 @@ void TestRestitutionRequiresImpactSpeed() {
   assert(std::abs(fast_collision[0].angular_velocity) < kTolerance);
 }
 
+void TestFixedRotationStaysLocked() {
+  std::vector<tiny2d::Square> squares = {
+      {1.0f, {100.0f, 100.0f}, {100.0f, 0.0f}, 0.0f, 5.0f, 40.0f, true},
+      {1.0f, {139.0f, 100.0f}, {}, 0.0f, -5.0f, 40.0f, true},
+  };
+  tiny2d::Update(squares, 0.0f, 1000.0f, 1000.0f, 1.0f);
+  assert(squares[0].angle == 0.0f);
+  assert(squares[1].angle == 0.0f);
+  assert(squares[0].angular_velocity == 0.0f);
+  assert(squares[1].angular_velocity == 0.0f);
+  assert(squares[1].velocity.x > 90.0f);
+}
+
+void TestLockedBlocksCollideOnRamp() {
+  constexpr float kRampAngle = -0.5235987756f;
+  constexpr float kPhysicsStep = 1.0f / 120.0f;
+  std::vector<tiny2d::Square> squares = {
+      {1.0f,
+       {710.0f, 397.9274f},
+       {-190.5256f, 110.0f},
+       kRampAngle,
+       0.0f,
+       40.0f,
+       true},
+      {1.0f, {470.0f, 536.4915f}, {}, kRampAngle, 0.0f, 40.0f, true},
+      {0.0f, {750.0f, 744.3376f}, {}, kRampAngle, 0.0f, 600.0f, true},
+  };
+
+  bool collision_observed = false;
+  for (int step = 0; step < 180; ++step) {
+    tiny2d::Update(squares, kPhysicsStep, 800.0f, 600.0f, 0.95f);
+    const float lower_block_downhill_speed =
+        -0.8660254f * squares[1].velocity.x + 0.5f * squares[1].velocity.y;
+    collision_observed |= lower_block_downhill_speed > 100.0f;
+  }
+
+  assert(collision_observed);
+  assert(squares[0].angular_velocity == 0.0f);
+  assert(squares[1].angular_velocity == 0.0f);
+}
+
 }  // namespace
 
 int main() {
@@ -108,8 +153,10 @@ int main() {
   TestCenteredCollisionDoesNotCreateRotation();
   TestOffCenterCollisionCreatesRotation();
   TestAngularDampingReducesRotation();
-  TestWallFrictionReducesTangentialSpeed();
+  TestConfigurableWallFriction();
   TestStaticSquareDoesNotMove();
   TestRestitutionRequiresImpactSpeed();
+  TestFixedRotationStaysLocked();
+  TestLockedBlocksCollideOnRamp();
   return 0;
 }

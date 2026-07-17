@@ -18,6 +18,7 @@ struct Square {
   float angle{};
   float angular_velocity{};
   float size{40.0f};
+  bool fixed_rotation{};
 };
 
 std::array<Vec2, 4> GetVertices(const Square& square);
@@ -25,7 +26,7 @@ std::array<Vec2, 4> GetVertices(const Square& square);
 bool IsColliding(const Square& square_a, const Square& square_b);
 
 void Update(std::vector<Square>& squares, float delta_time, float area_width,
-            float area_height, float coefficient);
+            float area_height, float restitution, float friction = 0.4f);
 
 }  // namespace tiny2d
 

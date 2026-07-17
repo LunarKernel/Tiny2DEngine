@@ -3,66 +3,241 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <iostream>
-#include <random>
+#include <sstream>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "tiny2d_engine.h"
 
 namespace {
 
-constexpr std::size_t kMaxSquares = 8;
-constexpr int kMaxSpawnAttempts = 100;
-constexpr float kSquareSize = 40.0f;
-constexpr float kRampSize = 400.0f;
-constexpr float kRampAngle = -0.35f;
+constexpr int kAreaWidth = 800;
+constexpr int kAreaHeight = 600;
+constexpr float kBlockSize = 40.0f;
+constexpr float kRampSize = 600.0f;
+constexpr float kRampAngle = -0.5235987756f;
 constexpr float kPhysicsStep = 1.0f / 120.0f;
 constexpr double kMaxFrameTime = 0.25;
 constexpr std::array<int, 6> kSquareIndices = {0, 1, 2, 0, 2, 3};
 
-void TrySpawnSquare(std::vector<tiny2d::Square>& squares, int area_width,
-                    int area_height, std::mt19937& random_engine) {
-  const float half_size = kSquareSize * 0.5f;
-  std::uniform_real_distribution<float> x_distribution(
-      half_size, static_cast<float>(area_width) - half_size);
-  std::uniform_real_distribution<float> y_distribution(
-      half_size, static_cast<float>(area_height) - half_size);
-  std::uniform_real_distribution<float> vx_distribution(-100.0f, 100.0f);
-  std::uniform_real_distribution<float> vy_distribution(-100.0f, 100.0f);
-  std::uniform_real_distribution<float> angle_distribution(0.0f,
-                                                           6.28318530718f);
-  std::uniform_real_distribution<float> angular_velocity_distribution(-3.0f,
-                                                                      3.0f);
+struct BlockConfig {
+  float surface_x;
+  float mass;
+  float downhill_speed;
+};
 
-  for (int attempt = 0; attempt < kMaxSpawnAttempts; ++attempt) {
-    tiny2d::Square candidate{
-        1.0f,
-        {x_distribution(random_engine), y_distribution(random_engine)},
-        {vx_distribution(random_engine), vy_distribution(random_engine)},
-        angle_distribution(random_engine),
-        angular_velocity_distribution(random_engine),
-        kSquareSize};
+struct SimulationConfig {
+  float friction{0.4f};
+  float restitution{0.95f};
+  BlockConfig upper_block{720.0f, 1.0f, 220.0f};
+  BlockConfig lower_block{480.0f, 1.0f, 0.0f};
+};
 
-    bool overlaps = false;
-    for (const tiny2d::Square& square : squares) {
-      if (tiny2d::IsColliding(candidate, square)) {
-        overlaps = true;
-        break;
-      }
+float ReadFloat(std::string_view prompt, float default_value,
+                float minimum_value, float maximum_value) {
+  while (true) {
+    std::cout << prompt << " [" << default_value << "] (" << minimum_value
+              << " to " << maximum_value << "): ";
+    std::string line;
+    if (!std::getline(std::cin, line) || line.empty()) {
+      return default_value;
     }
 
-    if (!overlaps) {
-      squares.push_back(candidate);
-      return;
+    std::istringstream input(line);
+    float value = 0.0f;
+    char extra = '\0';
+    if ((input >> value) && !(input >> extra) && std::isfinite(value) &&
+        value >= minimum_value && value <= maximum_value) {
+      return value;
     }
+    std::cout << "Invalid value. Try again.\n";
   }
 }
 
-std::size_t CountDynamicSquares(const std::vector<tiny2d::Square>& squares) {
-  return std::count_if(
-      squares.begin(), squares.end(),
-      [](const tiny2d::Square& square) { return square.mass > 0.0f; });
+BlockConfig ReadBlockConfig(std::string_view name, BlockConfig defaults,
+                            float minimum_x, float maximum_x) {
+  std::cout << '\n' << name << " parameters:\n";
+  defaults.surface_x =
+      ReadFloat("  Ramp position X (smaller is closer to the bottom)",
+                defaults.surface_x, minimum_x, maximum_x);
+  defaults.mass = ReadFloat("  Mass", defaults.mass, 0.01f, 1000.0f);
+  defaults.downhill_speed =
+      ReadFloat("  Initial speed (positive is downhill)",
+                defaults.downhill_speed, -1000.0f, 1000.0f);
+  return defaults;
+}
+
+tiny2d::Square CreateBlockOnRamp(const BlockConfig& config) {
+  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
+  const float surface_y =
+      static_cast<float>(kAreaHeight) +
+      (config.surface_x - ramp_bottom_x) * std::tan(kRampAngle);
+  const float half_size = kBlockSize * 0.5f;
+  const tiny2d::Vec2 position{
+      config.surface_x + std::sin(kRampAngle) * half_size,
+      surface_y - std::cos(kRampAngle) * half_size};
+  const tiny2d::Vec2 velocity{-std::cos(kRampAngle) * config.downhill_speed,
+                              -std::sin(kRampAngle) * config.downhill_speed};
+  return {config.mass, position, velocity, kRampAngle, 0.0f, kBlockSize, true};
+}
+
+SimulationConfig ReadSimulationConfig() {
+  SimulationConfig config;
+  std::cout << "Tiny2D Engine pre-start configuration\n"
+               "Press Enter to keep each default value.\n\n";
+  config.friction =
+      ReadFloat("Friction coefficient", config.friction, 0.0f, 5.0f);
+  config.restitution =
+      ReadFloat("Restitution coefficient", config.restitution, 0.0f, 1.0f);
+
+  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
+  const float horizontal_margin = kBlockSize * 0.5f * std::cos(kRampAngle);
+  const float minimum_x = ramp_bottom_x + horizontal_margin;
+  const float maximum_x = static_cast<float>(kAreaWidth) - horizontal_margin;
+
+  while (true) {
+    config.upper_block = ReadBlockConfig("Upper block", config.upper_block,
+                                         minimum_x, maximum_x);
+    config.lower_block = ReadBlockConfig("Lower block", config.lower_block,
+                                         minimum_x, maximum_x);
+    if (!tiny2d::IsColliding(CreateBlockOnRamp(config.upper_block),
+                             CreateBlockOnRamp(config.lower_block))) {
+      break;
+    }
+
+    std::cout
+        << "\nThe initial blocks overlap. Enter their parameters again.\n";
+    if (std::cin.eof()) {
+      const SimulationConfig defaults;
+      config.upper_block = defaults.upper_block;
+      config.lower_block = defaults.lower_block;
+      break;
+    }
+  }
+
+  assert(config.friction >= 0.0f);
+  assert(config.restitution >= 0.0f && config.restitution <= 1.0f);
+  assert(config.upper_block.mass > 0.0f);
+  assert(config.lower_block.mass > 0.0f);
+  assert(!tiny2d::IsColliding(CreateBlockOnRamp(config.upper_block),
+                              CreateBlockOnRamp(config.lower_block)));
+  std::cout << "\nStarting simulation...\n";
+  return config;
+}
+
+tiny2d::Square CreateRamp() {
+  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
+  const float visible_midpoint_x =
+      (ramp_bottom_x + static_cast<float>(kAreaWidth)) * 0.5f;
+  const float visible_midpoint_y =
+      static_cast<float>(kAreaHeight) +
+      (visible_midpoint_x - ramp_bottom_x) * std::tan(kRampAngle);
+  const float half_size = kRampSize * 0.5f;
+  const tiny2d::Vec2 center{
+      visible_midpoint_x - std::sin(kRampAngle) * half_size,
+      visible_midpoint_y + std::cos(kRampAngle) * half_size};
+
+  // ponytail: A large static square exposes one ramp face. Add rectangle
+  // dimensions only when the physics engine supports general box shapes.
+  return {0.0f, center, {}, kRampAngle, 0.0f, kRampSize, true};
+}
+
+void TransitionBlocksToFloor(std::vector<tiny2d::Square>& squares,
+                             float delta_time) {
+  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
+  const float half_size = kBlockSize * 0.5f;
+
+  for (tiny2d::Square& square : squares) {
+    if (square.mass <= 0.0f || !square.fixed_rotation ||
+        std::abs(square.angle - kRampAngle) > 0.001f ||
+        square.velocity.x >= 0.0f) {
+      continue;
+    }
+
+    const float front_corner_x =
+        square.position.x -
+        half_size * (std::cos(kRampAngle) + std::sin(kRampAngle));
+    const float predicted_corner_x =
+        front_corner_x + square.velocity.x * delta_time;
+    if (predicted_corner_x > ramp_bottom_x) {
+      continue;
+    }
+
+    const float speed_squared = square.velocity.x * square.velocity.x +
+                                square.velocity.y * square.velocity.y;
+    const float speed = std::sqrt(speed_squared);
+    const float time_to_junction =
+        std::clamp((front_corner_x - ramp_bottom_x) / -square.velocity.x, 0.0f,
+                   delta_time);
+    // Update() will still integrate the full step. This pre-offset makes its
+    // final position include only the horizontal motion after the junction.
+    square.position = {ramp_bottom_x - half_size + speed * time_to_junction,
+                       static_cast<float>(kAreaHeight) - half_size};
+    square.velocity = {-speed, 0.0f};
+    square.angle = 0.0f;
+    square.angular_velocity = 0.0f;
+
+    const float transitioned_speed_squared =
+        square.velocity.x * square.velocity.x +
+        square.velocity.y * square.velocity.y;
+    const float expected_end_x =
+        ramp_bottom_x - half_size - speed * (delta_time - time_to_junction);
+    assert(std::abs(transitioned_speed_squared - speed_squared) <=
+           std::max(1.0f, speed_squared) * 0.00001f);
+    assert(std::abs(square.position.x + square.velocity.x * delta_time -
+                    expected_end_x) <= 0.0001f);
+  }
+}
+
+void ConstrainBlocksToSurfaces(std::vector<tiny2d::Square>& squares) {
+  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
+
+  // ponytail: This scene uses an ideal guide constraint. Add a general
+  // constraint solver only when other surface shapes need the same behavior.
+  for (tiny2d::Square& square : squares) {
+    if (square.mass <= 0.0f || !square.fixed_rotation) {
+      continue;
+    }
+
+    tiny2d::Vec2 normal{};
+    tiny2d::Vec2 surface_position{};
+    if (std::abs(square.angle - kRampAngle) <= 0.001f) {
+      normal = {std::sin(kRampAngle), -std::cos(kRampAngle)};
+      surface_position = {ramp_bottom_x, static_cast<float>(kAreaHeight)};
+    } else if (std::abs(square.angle) <= 0.001f) {
+      normal = {0.0f, -1.0f};
+      surface_position = {square.position.x, static_cast<float>(kAreaHeight)};
+    } else {
+      continue;
+    }
+
+    const float half_size = square.size * 0.5f;
+    const tiny2d::Vec2 target_position{
+        surface_position.x + normal.x * half_size,
+        surface_position.y + normal.y * half_size};
+    const float position_error =
+        (square.position.x - target_position.x) * normal.x +
+        (square.position.y - target_position.y) * normal.y;
+    square.position.x -= normal.x * position_error;
+    square.position.y -= normal.y * position_error;
+
+    const float normal_velocity =
+        square.velocity.x * normal.x + square.velocity.y * normal.y;
+    square.velocity.x -= normal.x * normal_velocity;
+    square.velocity.y -= normal.y * normal_velocity;
+
+    const float remaining_position_error =
+        (square.position.x - target_position.x) * normal.x +
+        (square.position.y - target_position.y) * normal.y;
+    const float remaining_normal_velocity =
+        square.velocity.x * normal.x + square.velocity.y * normal.y;
+    assert(std::abs(remaining_position_error) <= 0.0001f);
+    assert(std::abs(remaining_normal_velocity) <= 0.0001f);
+  }
 }
 
 void DrawSquare(SDL_Renderer* renderer, const tiny2d::Square& square) {
@@ -82,8 +257,7 @@ void DrawSquare(SDL_Renderer* renderer, const tiny2d::Square& square) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-  constexpr int kAreaWidth = 800;
-  constexpr int kAreaHeight = 600;
+  const SimulationConfig config = ReadSimulationConfig();
 
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) < 0) {
     std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
@@ -111,15 +285,10 @@ int main(int argc, char* argv[]) {
   }
 
   std::vector<tiny2d::Square> squares = {
-      {1.0f, {120.0f, 120.0f}, {180.0f, 0.0f}, 0.0f, 0.0f, 40.0f},
-      {1.0f, {520.0f, 140.0f}, {-120.0f, 0.0f}, 0.0f, 0.0f, 40.0f},
-      // ponytail: One large static square supplies the ramp surface; add
-      // rectangle dimensions only when differently sized obstacles are needed.
-      {0.0f, {745.0f, 742.0f}, {}, kRampAngle, 0.0f, kRampSize},
+      CreateBlockOnRamp(config.upper_block),
+      CreateBlockOnRamp(config.lower_block),
+      CreateRamp(),
   };
-  squares.reserve(kMaxSquares + 1);
-
-  std::mt19937 random_engine{std::random_device{}()};
 
   bool running = true;
   const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
@@ -127,21 +296,13 @@ int main(int argc, char* argv[]) {
   double accumulated_time = 0.0;
 
   while (running) {
-    // 1. Process events.
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_QUIT) {
         running = false;
       }
-
-      if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_SPACE &&
-          event.key.repeat == 0 && CountDynamicSquares(squares) < kMaxSquares) {
-        TrySpawnSquare(squares, kAreaWidth, kAreaHeight, random_engine);
-        assert(CountDynamicSquares(squares) <= kMaxSquares);
-      }
     }
 
-    // 2. Accumulate real time for fixed physics steps.
     const Uint64 current_time = SDL_GetPerformanceCounter();
     const double frame_time =
         std::min(static_cast<double>(current_time - previous_time) / frequency,
@@ -149,23 +310,23 @@ int main(int argc, char* argv[]) {
     previous_time = current_time;
     accumulated_time += frame_time;
 
-    // 3. Update physics at a stable 120 Hz.
     while (accumulated_time >= kPhysicsStep) {
+      TransitionBlocksToFloor(squares, kPhysicsStep);
       tiny2d::Update(squares, kPhysicsStep, static_cast<float>(kAreaWidth),
-                     static_cast<float>(kAreaHeight), 0.95f);
+                     static_cast<float>(kAreaHeight), config.restitution,
+                     config.friction);
+      TransitionBlocksToFloor(squares, 0.0f);
+      ConstrainBlocksToSurfaces(squares);
       accumulated_time -= kPhysicsStep;
     }
 
-    // 4. Clear the screen.
     SDL_SetRenderDrawColor(renderer, 20, 20, 20, 255);
     SDL_RenderClear(renderer);
 
-    // 5. Draw the rotated squares.
     for (const tiny2d::Square& square : squares) {
       DrawSquare(renderer, square);
     }
 
-    // 6. Present the rendered frame.
     SDL_RenderPresent(renderer);
   }
 
