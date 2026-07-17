@@ -83,6 +83,14 @@ bool StepScenario(std::vector<tiny2d::Rectangle>* bodies,
 void TestDefaultAndFeatureConfigurations() {
   SimulationConfig config;
   CHECK(GetConfigError(config) == nullptr);
+  CHECK(Near(config.body_a.mass_kg, 1.0f));
+  CHECK(Near(config.body_b.mass_kg, 3.0f));
+  CHECK(Near(CreateBody(config.body_a, config).mass, 1.0f));
+  CHECK(Near(CreateBody(config.body_b, config).mass, 3.0f));
+  const float default_mass_scale = GetEngineMassPerKilogram(config);
+  config.body_b.mass_kg = 5.0f;
+  CHECK(Near(GetEngineMassPerKilogram(config), default_mass_scale));
+  config.body_b.mass_kg = 3.0f;
 
   config.ramp_enabled = false;
   CHECK(GetConfigError(config) == nullptr);
@@ -111,7 +119,7 @@ void TestEveryFloatFieldRejectsNonFiniteValues() {
       &SimulationConfig::real_floor_length_m,
       &SimulationConfig::real_ramp_length_m,
       &SimulationConfig::reference_speed_mps,
-      &SimulationConfig::reference_mass_kg,
+      &SimulationConfig::body_a_engine_mass,
       &SimulationConfig::gravity_mps2,
       &SimulationConfig::friction,
       &SimulationConfig::restitution,
@@ -121,7 +129,7 @@ void TestEveryFloatFieldRejectsNonFiniteValues() {
       &SimulationConfig::spring_stiffness,
   };
   constexpr std::array<float BodyConfig::*, 5> body_fields = {
-      &BodyConfig::surface_x,      &BodyConfig::mass,
+      &BodyConfig::surface_x,      &BodyConfig::mass_kg,
       &BodyConfig::downhill_speed, &BodyConfig::length_units,
       &BodyConfig::charge,
   };
@@ -154,7 +162,7 @@ void TestInvalidRangesAndDegenerateInputs() {
   config.reference_speed_mps = 0.0f;
   ExpectInvalidConfig(config);
   config = SimulationConfig{};
-  config.reference_mass_kg = -1.0f;
+  config.body_a_engine_mass = -1.0f;
   ExpectInvalidConfig(config);
   config = SimulationConfig{};
   config.gravity_mps2 = -9.8f;
@@ -190,11 +198,22 @@ void TestInvalidRangesAndDegenerateInputs() {
   config.spring_stiffness = 0.0f;
   ExpectInvalidConfig(config);
   config = SimulationConfig{};
-  config.body_a.mass = 0.0f;
+  config.body_a.mass_kg = 0.0f;
   ExpectInvalidConfig(config);
   config = SimulationConfig{};
-  config.body_b.mass = -1.0f;
+  config.body_b.mass_kg = -1.0f;
   ExpectInvalidConfig(config);
+  config = SimulationConfig{};
+  config.body_a.mass_kg = 0.009f;
+  ExpectInvalidConfig(config);
+  config = SimulationConfig{};
+  config.body_b.mass_kg = 10000.01f;
+  ExpectInvalidConfig(config);
+  config = SimulationConfig{};
+  config.body_a.mass_kg = 0.01f;
+  config.body_b.mass_kg = 10000.0f;
+  config.spring_enabled = false;
+  CHECK(GetConfigError(config) == nullptr);
   config = SimulationConfig{};
   config.body_a.downhill_speed = 0.0f;
   ExpectInvalidConfig(config);
@@ -238,9 +257,9 @@ void TestDangerousFiniteCalibrationsAreRejected() {
   config.real_floor_length_m = 10000.0f;
   config.real_ramp_length_m = 10000.0f;
   config.reference_speed_mps = 0.01f;
-  config.reference_mass_kg = 0.01f;
-  config.body_a.mass = 1000.0f;
-  config.body_b.mass = 1000.0f;
+  config.body_a.mass_kg = 0.01f;
+  config.body_a_engine_mass = 1000.0f;
+  config.body_b.mass_kg = 1000.0f;
   config.body_a.charged = true;
   config.body_b.charged = true;
   config.body_a.charge = 1000.0f;
@@ -256,8 +275,9 @@ void TestDangerousFiniteCalibrationsAreRejected() {
   ExpectInvalidConfig(config);
 
   config = SimulationConfig{};
-  config.body_a.mass = 0.01f;
-  config.body_b.mass = 0.01f;
+  config.body_a_engine_mass = 0.01f;
+  config.body_a.mass_kg = 1.0f;
+  config.body_b.mass_kg = 0.01f;
   config.spring_stiffness = 100.0f;
   ExpectInvalidConfig(config);
 }
@@ -312,7 +332,7 @@ void TestSiCalibrationAndElectricFieldDirections() {
   config.real_floor_length_m *= 2.0f;
   config.real_ramp_length_m *= 2.0f;
   config.reference_speed_mps = 2.0f;
-  config.reference_mass_kg = 2.0f;
+  config.body_a.mass_kg = 2.0f;
   config.electric_field_angle_degrees = 0.0f;
   CHECK(Near(GetPixelsPerMeter(config), 100.0f));
   CHECK(Near(GetPixelSpeedPerMeterPerSecond(config), 100.0f));
@@ -329,12 +349,51 @@ void TestSiCalibrationAndElectricFieldDirections() {
       acceleration.x / GetPixelAccelerationPerMeterPerSecondSquared(config);
   CHECK(Near(real_acceleration, config.body_a.charge *
                                     config.electric_field_strength_n_per_c /
-                                    config.reference_mass_kg));
+                                    config.body_a.mass_kg));
+}
+
+void TestBodyMassCalibrationUsesBodyAReference() {
+  SimulationConfig config;
+  config.body_a.mass_kg = 2.0f;
+  config.body_a_engine_mass = 4.0f;
+  config.body_b.mass_kg = 3.0f;
+
+  CHECK(Near(GetEngineMassPerKilogram(config), 2.0f));
+  CHECK(Near(GetBodyEngineMass(config.body_a, config), 4.0f));
+  CHECK(Near(GetBodyEngineMass(config.body_b, config), 6.0f));
+  CHECK(Near(CreateBody(config.body_a, config).mass, 4.0f));
+  CHECK(Near(CreateBody(config.body_b, config).mass, 6.0f));
+
+  config.body_b.mass_kg = 7.5f;
+  CHECK(Near(GetEngineMassPerKilogram(config), 2.0f));
+  CHECK(Near(CreateBody(config.body_b, config).mass, 15.0f));
+
+  config.body_a.mass_kg = 4.0f;
+  CHECK(Near(GetEngineMassPerKilogram(config), 1.0f));
+  CHECK(Near(CreateBody(config.body_b, config).mass, 7.5f));
+  config.body_a_engine_mass = 8.0f;
+  CHECK(Near(GetEngineMassPerKilogram(config), 2.0f));
+  CHECK(Near(CreateBody(config.body_b, config).mass, 15.0f));
+
+  config.body_a.mass_kg = 2.0f;
+  config.body_a_engine_mass = 4.0f;
+  config.body_b.mass_kg = 8.0f;
+  config.body_b.charged = true;
+  config.body_b.charge = 2.0f;
+  config.electric_field_enabled = true;
+  config.electric_field_strength_n_per_c = 12.0f;
+  const tiny2d::Rectangle body_b = CreateBody(config.body_b, config);
+  const tiny2d::Vec2 acceleration =
+      tiny2d::GetLinearAcceleration(body_b, GetElectricField(config), 0.0f);
+  const float real_acceleration =
+      acceleration.x / GetPixelAccelerationPerMeterPerSecondSquared(config);
+  CHECK(Near(real_acceleration, 3.0f));
 }
 
 void TestBodyCreationAndClamping() {
   SimulationConfig config;
   const tiny2d::Rectangle ramp_body = CreateBody(config.body_a, config);
+  CHECK(Near(ramp_body.mass, config.body_a_engine_mass));
   CHECK(Near(ramp_body.angle, GetRampAngle(config)));
   CHECK(Near(std::hypot(ramp_body.velocity.x, ramp_body.velocity.y), 200.0f));
   CHECK(ramp_body.fixed_rotation);
@@ -343,6 +402,7 @@ void TestBodyCreationAndClamping() {
   config.body_b.charged = true;
   config.body_b.charge = -3.0f;
   const tiny2d::Rectangle floor_body = CreateBody(config.body_b, config);
+  CHECK(Near(floor_body.mass, 3.0f));
   CHECK(Near(floor_body.angle, 0.0f));
   CHECK(Near(floor_body.position.y,
              static_cast<float>(kAreaHeight) - kUnitLength * 0.5f));
@@ -480,14 +540,27 @@ void TestSurfaceConstraintIsStableAndIdempotent() {
 
 void TestSpringForceBoundariesAndMassScaling() {
   SimulationConfig config;
-  config.body_b.mass = 2.0f;
+  config.body_a.mass_kg = 2.0f;
+  config.body_a_engine_mass = 1.0f;
+  config.body_b.mass_kg = 4.0f;
   std::vector<tiny2d::Rectangle> bodies = {CreateBody(config.body_b, config)};
+  CHECK(Near(bodies[0].mass, 2.0f));
   bodies[0].position.x =
       GetSpringRestX(config) - 10.0f + bodies[0].width * 0.5f;
   bodies[0].velocity = {};
   ApplySpringForce(bodies, config, kPhysicsStep);
   CHECK(Near(bodies[0].velocity.x,
              config.spring_stiffness * 10.0f / bodies[0].mass * kPhysicsStep));
+  const float light_body_speed = bodies[0].velocity.x;
+
+  config.body_b.mass_kg = 8.0f;
+  bodies = {CreateBody(config.body_b, config)};
+  bodies[0].position.x =
+      GetSpringRestX(config) - 10.0f + bodies[0].width * 0.5f;
+  bodies[0].velocity = {};
+  ApplySpringForce(bodies, config, kPhysicsStep);
+  CHECK(Near(bodies[0].mass, 4.0f));
+  CHECK(Near(bodies[0].velocity.x, light_body_speed * 0.5f));
 
   bodies[0].position.x = GetSpringRestX(config) + bodies[0].width * 0.5f;
   bodies[0].velocity = {};
@@ -578,7 +651,7 @@ void TestFixedSeedSafeConfigurations() {
     config.restitution = coefficient_distribution(random_engine);
     config.spring_enabled = false;
     config.body_a.downhill_speed = speed_distribution(random_engine);
-    config.body_b.mass = mass_distribution(random_engine);
+    config.body_b.mass_kg = mass_distribution(random_engine);
     config.body_a.surface_x = (GetMinimumBodySurfaceX(config.body_a, config) +
                                GetMaximumBodySurfaceX(config.body_a, config)) *
                               0.5f;
@@ -588,6 +661,8 @@ void TestFixedSeedSafeConfigurations() {
     }
 
     std::vector<tiny2d::Rectangle> bodies = CreateScene(config);
+    CHECK(Near(bodies[1].mass / GetEngineMassPerKilogram(config),
+               config.body_b.mass_kg));
     for (int step = 0; step < 240; ++step) {
       CHECK(StepScenario(&bodies, config));
       for (const tiny2d::Rectangle& body : bodies) {
@@ -624,6 +699,8 @@ int main() {
       NamedTest{"geometry scaling", TestGeometryScaling},
       NamedTest{"SI and electric calibration",
                 TestSiCalibrationAndElectricFieldDirections},
+      NamedTest{"Body A mass scale and Body B real mass",
+                TestBodyMassCalibrationUsesBodyAReference},
       NamedTest{"body creation and clamping", TestBodyCreationAndClamping},
       NamedTest{"snapshot lookup and acceleration",
                 TestSnapshotLookupAndAcceleration},

@@ -41,7 +41,7 @@ constexpr std::array<const char*, 2> kBodyLabels = {"A", "B"};
 
 struct BodyConfig {
   float surface_x;
-  float mass;
+  float mass_kg;
   float downhill_speed;
   float length_units;
   bool starts_on_floor{};
@@ -53,7 +53,7 @@ struct SimulationConfig {
   float real_floor_length_m{kDefaultFloorLengthMeters};
   float real_ramp_length_m{kDefaultRampLengthMeters};
   float reference_speed_mps{1.0f};
-  float reference_mass_kg{1.0f};
+  float body_a_engine_mass{1.0f};
   float gravity_mps2{9.8f};
   float friction{0.0f};
   float restitution{1.0f};
@@ -122,7 +122,12 @@ float GetRealSecondsPerSimulationSecond(const SimulationConfig& config) {
 }
 
 float GetEngineMassPerKilogram(const SimulationConfig& config) {
-  return config.body_a.mass / config.reference_mass_kg;
+  return config.body_a_engine_mass / config.body_a.mass_kg;
+}
+
+float GetBodyEngineMass(const BodyConfig& body_config,
+                        const SimulationConfig& simulation_config) {
+  return body_config.mass_kg * GetEngineMassPerKilogram(simulation_config);
 }
 
 float GetPixelAccelerationPerMeterPerSecondSquared(
@@ -174,7 +179,7 @@ tiny2d::Rectangle CreateBody(const BodyConfig& body_config,
   const float half_height = kUnitLength * 0.5f;
   if (!simulation_config.ramp_enabled || body_config.starts_on_floor) {
     return {
-        body_config.mass,
+        GetBodyEngineMass(body_config, simulation_config),
         {body_config.surface_x, static_cast<float>(kAreaHeight) - half_height},
         {-body_config.downhill_speed, 0.0f},
         0.0f,
@@ -196,7 +201,7 @@ tiny2d::Rectangle CreateBody(const BodyConfig& body_config,
   const tiny2d::Vec2 velocity{
       -std::cos(ramp_angle) * body_config.downhill_speed,
       -std::sin(ramp_angle) * body_config.downhill_speed};
-  return {body_config.mass,
+  return {GetBodyEngineMass(body_config, simulation_config),
           position,
           velocity,
           ramp_angle,
@@ -334,7 +339,7 @@ const char* GetConfigError(const SimulationConfig& config) {
       config.real_floor_length_m,
       config.real_ramp_length_m,
       config.reference_speed_mps,
-      config.reference_mass_kg,
+      config.body_a_engine_mass,
       config.gravity_mps2,
       config.friction,
       config.restitution,
@@ -343,12 +348,12 @@ const char* GetConfigError(const SimulationConfig& config) {
       config.ramp_angle_degrees,
       config.spring_stiffness,
       config.body_a.surface_x,
-      config.body_a.mass,
+      config.body_a.mass_kg,
       config.body_a.downhill_speed,
       config.body_a.length_units,
       config.body_a.charge,
       config.body_b.surface_x,
-      config.body_b.mass,
+      config.body_b.mass_kg,
       config.body_b.downhill_speed,
       config.body_b.length_units,
       config.body_b.charge,
@@ -358,19 +363,22 @@ const char* GetConfigError(const SimulationConfig& config) {
     return "Every value must be a valid number.";
   }
   if (config.real_floor_length_m <= 0.0f || config.real_ramp_length_m <= 0.0f ||
-      config.reference_speed_mps <= 0.0f || config.reference_mass_kg <= 0.0f) {
-    return "SI lengths, A reference speed, and A reference mass must be "
-           "positive.";
+      config.reference_speed_mps <= 0.0f || config.body_a_engine_mass <= 0.0f) {
+    return "SI lengths, A reference speed, and A engine reference mass must "
+           "be positive.";
   }
   if (config.real_floor_length_m < 0.1f ||
       config.real_floor_length_m > 10000.0f ||
       config.real_ramp_length_m < 0.1f ||
       config.real_ramp_length_m > 10000.0f ||
       config.reference_speed_mps < 0.01f ||
-      config.reference_speed_mps > 1000.0f ||
-      config.reference_mass_kg < 0.01f || config.reference_mass_kg > 10000.0f) {
-    return "SI lengths, reference speed, or reference mass is outside the "
+      config.reference_speed_mps > 1000.0f) {
+    return "SI lengths or reference speed is outside the "
            "supported setup range.";
+  }
+  if (config.body_a_engine_mass < 0.01f ||
+      config.body_a_engine_mass > 1000.0f) {
+    return "Body A engine reference mass must be in [0.01, 1000].";
   }
   if (config.gravity_mps2 != 9.8f && config.gravity_mps2 != 10.0f) {
     return "Gravity must be either 9.8 or 10 m/s^2.";
@@ -394,7 +402,7 @@ const char* GetConfigError(const SimulationConfig& config) {
   const std::array<const BodyConfig*, 2> body_configs = {&config.body_a,
                                                          &config.body_b};
   for (const BodyConfig* body_config : body_configs) {
-    if (body_config->mass < 0.01f || body_config->mass > 1000.0f ||
+    if (body_config->mass_kg < 0.01f || body_config->mass_kg > 10000.0f ||
         body_config->downhill_speed < -5000.0f ||
         body_config->downhill_speed > 5000.0f ||
         body_config->charge < -1000.0f || body_config->charge > 1000.0f ||
@@ -461,7 +469,9 @@ const char* GetConfigError(const SimulationConfig& config) {
   }
 
   if (config.spring_enabled) {
-    const float minimum_mass = std::min(config.body_a.mass, config.body_b.mass);
+    const float minimum_mass =
+        std::min(GetBodyEngineMass(config.body_a, config),
+                 GetBodyEngineMass(config.body_b, config));
     const double maximum_spring_acceleration =
         static_cast<double>(config.spring_stiffness) * GetSpringRestX(config) /
         minimum_mass;
@@ -568,8 +578,6 @@ void DrawBodyControls(const char* title, BodyConfig* body_config,
                      : "Position is on the floor. Speed: positive moves left.");
   SliderInputFloat(starts_on_ramp ? "Ramp x (px)" : "Floor x (px)",
                    &body_config->surface_x, minimum_x, maximum_x, "%.1f");
-  SliderInputFloat("Engine mass", &body_config->mass, 0.01f, 1000.0f, "%.2f",
-                   ImGuiSliderFlags_Logarithmic);
   SliderInputFloat("Pixel initial speed (px/s)", &body_config->downhill_speed,
                    -5000.0f, 5000.0f, "%.1f");
   ImGui::PopID();
@@ -591,8 +599,8 @@ bool DrawSetupScreen(SimulationConfig* config) {
   ImGui::TextUnformatted("Physical data (SI)");
   ImGui::Separator();
   ImGui::TextDisabled(
-      "Enter the problem values. Body A calibrates speed and mass; its engine "
-      "values stay unchanged.");
+      "Enter the problem values. Body A defines the speed and mass scales; "
+      "Body B uses the same mass scale.");
   ImGui::Checkbox("Enable ramp", &config->ramp_enabled);
   SliderInputFloat("Floor length (m)", &config->real_floor_length_m, 0.1f,
                    10000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
@@ -604,8 +612,10 @@ bool DrawSetupScreen(SimulationConfig* config) {
   ImGui::EndDisabled();
   SliderInputFloat("Body A reference speed (m/s)", &config->reference_speed_mps,
                    0.01f, 1000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
-  SliderInputFloat("Body A reference mass (kg)", &config->reference_mass_kg,
-                   0.01f, 10000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+  SliderInputFloat("Body A reference mass (kg)", &config->body_a.mass_kg, 0.01f,
+                   10000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+  SliderInputFloat("Body B mass (kg)", &config->body_b.mass_kg, 0.01f, 10000.0f,
+                   "%.3f", ImGuiSliderFlags_Logarithmic);
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("Gravity (m/s^2)");
   ImGui::SameLine(260.0f);
@@ -622,6 +632,8 @@ bool DrawSetupScreen(SimulationConfig* config) {
         "px/s^2",
         GetPixelsPerMeter(*config), GetRealSecondsPerSimulationSecond(*config),
         GetPixelGravity(*config));
+    ImGui::TextDisabled("Mass scale from Body A: %.4f engine mass/kg",
+                        GetEngineMassPerKilogram(*config));
   }
   ImGui::Spacing();
 
@@ -651,6 +663,9 @@ bool DrawSetupScreen(SimulationConfig* config) {
     ImGui::TextDisabled(
         "These values control the pixel simulation and normally stay at their "
         "defaults.");
+    SliderInputFloat("Body A engine reference mass",
+                     &config->body_a_engine_mass, 0.01f, 1000.0f, "%.3f",
+                     ImGuiSliderFlags_Logarithmic);
     ImGui::BeginDisabled(!config->spring_enabled);
     SliderInputFloat("Spring strength", &config->spring_stiffness, 0.1f, 100.0f,
                      "%.1f", ImGuiSliderFlags_Logarithmic);
@@ -724,7 +739,8 @@ void CheckDisplayQuantities() {
   config.real_floor_length_m *= 2.0f;
   config.real_ramp_length_m *= 2.0f;
   config.reference_speed_mps = 2.0f;
-  config.reference_mass_kg = 2.0f;
+  config.body_a.mass_kg = 2.0f;
+  config.body_b.mass_kg = 6.0f;
   assert(std::abs(GetPixelsPerMeter(config) - 100.0f) <= 0.001f);
   assert(std::abs(GetPixelSpeedPerMeterPerSecond(config) - 100.0f) <= 0.001f);
   assert(std::abs(GetRealSecondsPerSimulationSecond(config) - 1.0f) <= 0.001f);
@@ -735,7 +751,8 @@ void CheckDisplayQuantities() {
   const tiny2d::Vec2 electric_field = GetElectricField(config);
   assert(std::abs(electric_field.x - 490.0f) <= 0.01f);
   const float body_a_electric_acceleration_mps2 =
-      electric_field.x * config.body_a.charge / config.body_a.mass /
+      electric_field.x * config.body_a.charge /
+      GetBodyEngineMass(config.body_a, config) /
       GetPixelAccelerationPerMeterPerSecondSquared(config);
   assert(std::abs(body_a_electric_acceleration_mps2 - 4.9f) <= 0.001f);
 
@@ -764,8 +781,8 @@ void CheckDisplayQuantities() {
   body.acceleration = {100.0f, 0.0f};
   assert(std::abs(GetSignedSurfaceAcceleration(body, config) + 100.0f) <=
          0.001f);
-  assert(std::abs(config.body_b.mass / GetEngineMassPerKilogram(config) -
-                  6.0f) <= 0.001f);
+  assert(std::abs(config.body_b.mass_kg - 6.0f) <= 0.001f);
+  assert(std::abs(GetBodyEngineMass(config.body_b, config) - 3.0f) <= 0.001f);
 }
 #endif
 
@@ -1178,7 +1195,6 @@ void DrawMonitorWindow(const SimulationConfig& config,
   const float length_scale = GetPixelsPerMeter(config);
   const float speed_scale = GetPixelSpeedPerMeterPerSecond(config);
   const float time_scale = GetRealSecondsPerSimulationSecond(config);
-  const float mass_scale = GetEngineMassPerKilogram(config);
   const float real_simulation_time = simulation_time * time_scale;
   ImGuiIO& io = ImGui::GetIO();
   ImGui::SetNextWindowPos({0.0f, 0.0f});
@@ -1245,8 +1261,8 @@ void DrawMonitorWindow(const SimulationConfig& config,
     ImGui::TableSetupColumn("Surface acceleration (m/s^2)");
     ImGui::TableSetupColumn("Vector acceleration (m/s^2)");
     ImGui::TableHeadersRow();
-    const std::array<float, 2> masses = {config.body_a.mass,
-                                         config.body_b.mass};
+    const std::array<float, 2> masses_kg = {config.body_a.mass_kg,
+                                            config.body_b.mass_kg};
     const std::array<float, 2> widths = {GetBodyWidth(config.body_a),
                                          GetBodyWidth(config.body_b)};
     const float acceleration_scale = length_scale / (speed_scale * speed_scale);
@@ -1256,7 +1272,7 @@ void DrawMonitorWindow(const SimulationConfig& config,
       ImGui::TableSetColumnIndex(0);
       ImGui::TextUnformatted(kBodyLabels[i]);
       ImGui::TableSetColumnIndex(1);
-      ImGui::Text("%.3f", masses[i] / mass_scale);
+      ImGui::Text("%.3f", masses_kg[i]);
       ImGui::TableSetColumnIndex(2);
       if (config.ramp_enabled) {
         ImGui::Text("%+.3f",
