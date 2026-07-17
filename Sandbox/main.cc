@@ -15,6 +15,8 @@ namespace {
 constexpr std::size_t kMaxSquares = 8;
 constexpr int kMaxSpawnAttempts = 100;
 constexpr float kSquareSize = 40.0f;
+constexpr float kRampSize = 400.0f;
+constexpr float kRampAngle = -0.35f;
 constexpr float kPhysicsStep = 1.0f / 120.0f;
 constexpr double kMaxFrameTime = 0.25;
 constexpr std::array<int, 6> kSquareIndices = {0, 1, 2, 0, 2, 3};
@@ -26,12 +28,21 @@ void TrySpawnSquare(std::vector<tiny2d::Square>& squares, int area_width,
       half_size, static_cast<float>(area_width) - half_size);
   std::uniform_real_distribution<float> y_distribution(
       half_size, static_cast<float>(area_height) - half_size);
+  std::uniform_real_distribution<float> vx_distribution(-100.0f, 100.0f);
+  std::uniform_real_distribution<float> vy_distribution(-100.0f, 100.0f);
+  std::uniform_real_distribution<float> angle_distribution(0.0f,
+                                                           6.28318530718f);
+  std::uniform_real_distribution<float> angular_velocity_distribution(-3.0f,
+                                                                      3.0f);
 
   for (int attempt = 0; attempt < kMaxSpawnAttempts; ++attempt) {
     tiny2d::Square candidate{
-        1.0f, {x_distribution(random_engine), y_distribution(random_engine)},
-        {},   0.0f,
-        0.0f, kSquareSize};
+        1.0f,
+        {x_distribution(random_engine), y_distribution(random_engine)},
+        {vx_distribution(random_engine), vy_distribution(random_engine)},
+        angle_distribution(random_engine),
+        angular_velocity_distribution(random_engine),
+        kSquareSize};
 
     bool overlaps = false;
     for (const tiny2d::Square& square : squares) {
@@ -48,12 +59,20 @@ void TrySpawnSquare(std::vector<tiny2d::Square>& squares, int area_width,
   }
 }
 
+std::size_t CountDynamicSquares(const std::vector<tiny2d::Square>& squares) {
+  return std::count_if(
+      squares.begin(), squares.end(),
+      [](const tiny2d::Square& square) { return square.mass > 0.0f; });
+}
+
 void DrawSquare(SDL_Renderer* renderer, const tiny2d::Square& square) {
   const std::array<tiny2d::Vec2, 4> corners = tiny2d::GetVertices(square);
   std::array<SDL_Vertex, 4> vertices{};
+  const SDL_Color color = square.mass > 0.0f ? SDL_Color{255, 100, 100, 255}
+                                             : SDL_Color{90, 110, 120, 255};
   for (std::size_t i = 0; i < corners.size(); ++i) {
     vertices[i].position = {corners[i].x, corners[i].y};
-    vertices[i].color = {255, 100, 100, 255};
+    vertices[i].color = color;
   }
   SDL_RenderGeometry(renderer, nullptr, vertices.data(),
                      static_cast<int>(vertices.size()), kSquareIndices.data(),
@@ -94,8 +113,11 @@ int main(int argc, char* argv[]) {
   std::vector<tiny2d::Square> squares = {
       {1.0f, {120.0f, 120.0f}, {180.0f, 0.0f}, 0.0f, 0.0f, 40.0f},
       {1.0f, {520.0f, 140.0f}, {-120.0f, 0.0f}, 0.0f, 0.0f, 40.0f},
+      // ponytail: One large static square supplies the ramp surface; add
+      // rectangle dimensions only when differently sized obstacles are needed.
+      {0.0f, {745.0f, 742.0f}, {}, kRampAngle, 0.0f, kRampSize},
   };
-  squares.reserve(kMaxSquares);
+  squares.reserve(kMaxSquares + 1);
 
   std::mt19937 random_engine{std::random_device{}()};
 
@@ -113,9 +135,9 @@ int main(int argc, char* argv[]) {
       }
 
       if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_SPACE &&
-          event.key.repeat == 0 && squares.size() < kMaxSquares) {
+          event.key.repeat == 0 && CountDynamicSquares(squares) < kMaxSquares) {
         TrySpawnSquare(squares, kAreaWidth, kAreaHeight, random_engine);
-        assert(squares.size() <= kMaxSquares);
+        assert(CountDynamicSquares(squares) <= kMaxSquares);
       }
     }
 

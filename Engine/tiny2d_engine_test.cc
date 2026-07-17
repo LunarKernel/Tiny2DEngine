@@ -71,6 +71,35 @@ void TestWallFrictionReducesTangentialSpeed() {
   assert(std::abs(squares[0].velocity.x) < 10.0f);
 }
 
+void TestStaticSquareDoesNotMove() {
+  std::vector<tiny2d::Square> squares = {
+      {1.0f, {100.0f, 100.0f}, {10.0f, 0.0f}, 0.0f, 0.0f, 40.0f},
+      {0.0f, {139.0f, 115.0f}, {}, -0.35f, 0.0f, 40.0f},
+  };
+  const tiny2d::Square fixed_square = squares[1];
+  tiny2d::Update(squares, 0.0f, 1000.0f, 1000.0f, 1.0f);
+  assert(squares[1].position.x == fixed_square.position.x);
+  assert(squares[1].position.y == fixed_square.position.y);
+  assert(squares[1].angle == fixed_square.angle);
+}
+
+void TestRestitutionRequiresImpactSpeed() {
+  std::vector<tiny2d::Square> slow_collision = {
+      {1.0f, {100.0f, 100.0f}, {10.0f, 0.0f}, 0.0f, 0.0f, 40.0f},
+      {0.0f, {139.0f, 100.0f}, {}, 0.0f, 0.0f, 40.0f},
+  };
+  tiny2d::Update(slow_collision, 0.0f, 1000.0f, 1000.0f, 1.0f);
+  assert(std::abs(slow_collision[0].velocity.x) < kTolerance);
+
+  std::vector<tiny2d::Square> fast_collision = {
+      {1.0f, {100.0f, 100.0f}, {100.0f, 0.0f}, 0.0f, 0.0f, 40.0f},
+      {0.0f, {139.0f, 100.0f}, {}, 0.0f, 0.0f, 40.0f},
+  };
+  tiny2d::Update(fast_collision, 0.0f, 1000.0f, 1000.0f, 1.0f);
+  assert(fast_collision[0].velocity.x < -90.0f);
+  assert(std::abs(fast_collision[0].angular_velocity) < kTolerance);
+}
+
 }  // namespace
 
 int main() {
@@ -80,5 +109,7 @@ int main() {
   TestOffCenterCollisionCreatesRotation();
   TestAngularDampingReducesRotation();
   TestWallFrictionReducesTangentialSpeed();
+  TestStaticSquareDoesNotMove();
+  TestRestitutionRequiresImpactSpeed();
   return 0;
 }
