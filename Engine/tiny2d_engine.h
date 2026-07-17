@@ -23,7 +23,10 @@ struct Rectangle {
   float charge{};
 };
 
-Vec2 GetLinearAcceleration(const Rectangle& rectangle, Vec2 electric_field);
+// Public physics functions reject non-finite or physically invalid inputs with
+// std::invalid_argument before modifying any rectangle state.
+Vec2 GetLinearAcceleration(const Rectangle& rectangle, Vec2 electric_field,
+                           float gravity = 98.1f);
 
 std::array<Vec2, 4> GetVertices(const Rectangle& rectangle);
 
@@ -31,7 +34,8 @@ bool IsColliding(const Rectangle& rectangle_a, const Rectangle& rectangle_b);
 
 void Update(std::vector<Rectangle>& rectangles, float delta_time,
             float area_width, float area_height, float restitution,
-            float friction = 0.4f, Vec2 electric_field = {});
+            float friction = 0.4f, Vec2 electric_field = {},
+            float gravity = 98.1f);
 
 }  // namespace tiny2d
 

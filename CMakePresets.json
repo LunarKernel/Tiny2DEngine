@@ -22,6 +22,32 @@
       "displayName": "Debug",
       "configurePreset": "msvc-x64",
       "configuration": "Debug"
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "configurePreset": "msvc-x64",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-debug",
+      "displayName": "Test Debug",
+      "configurePreset": "msvc-x64",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test-release",
+      "displayName": "Test Release",
+      "configurePreset": "msvc-x64",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

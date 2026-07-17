@@ -18,6 +18,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+function(tiny2d_enable_warnings target)
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+endfunction()
+
 find_package(SDL2 CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 
@@ -30,6 +38,7 @@ target_include_directories(Tiny2DEngine PUBLIC
 )
 
 target_link_libraries(Tiny2DEngine PUBLIC SDL2::SDL2)
+tiny2d_enable_warnings(Tiny2DEngine)
 
 add_executable(Sandbox WIN32
     Sandbox/main.cc
@@ -40,6 +49,7 @@ target_link_libraries(Sandbox PRIVATE
     Tiny2DEngine
     imgui::imgui
 )
+tiny2d_enable_warnings(Sandbox)
 
 enable_testing()
 
@@ -48,5 +58,24 @@ add_executable(Tiny2DEngineTests
 )
 
 target_link_libraries(Tiny2DEngineTests PRIVATE Tiny2DEngine)
+tiny2d_enable_warnings(Tiny2DEngineTests)
 
 add_test(NAME Tiny2DEngineTests COMMAND Tiny2DEngineTests)
+set_tests_properties(Tiny2DEngineTests PROPERTIES TIMEOUT 30)
+
+# Test the exact headless model helpers used by the SDL application. The test
+# translation unit includes main.cc with its entry point renamed, avoiding a
+# second copy of the calibration and transition formulas.
+add_executable(Tiny2DSimulationTests
+    Sandbox/simulation_model_test.cc
+)
+
+target_link_libraries(Tiny2DSimulationTests PRIVATE
+    SDL2::SDL2
+    Tiny2DEngine
+    imgui::imgui
+)
+tiny2d_enable_warnings(Tiny2DSimulationTests)
+
+add_test(NAME Tiny2DSimulationTests COMMAND Tiny2DSimulationTests)
+set_tests_properties(Tiny2DSimulationTests PROPERTIES TIMEOUT 30)
