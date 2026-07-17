@@ -74,40 +74,42 @@ Vec2 Normalize(Vec2 vector) {
   return Multiply(vector, 1.0f / std::sqrt(length_squared));
 }
 
-float InverseMass(const Square& square) {
+float InverseMass(const Rectangle& square) {
   return square.mass > 0.0f ? 1.0f / square.mass : 0.0f;
 }
 
-float InverseInertia(const Square& square) {
-  if (square.fixed_rotation || square.mass <= 0.0f || square.size <= 0.0f) {
+float InverseInertia(const Rectangle& square) {
+  if (square.fixed_rotation || square.mass <= 0.0f || square.width <= 0.0f ||
+      square.height <= 0.0f) {
     return 0.0f;
   }
-  return 6.0f / (square.mass * square.size * square.size);
+  return 12.0f / (square.mass * (square.width * square.width +
+                                 square.height * square.height));
 }
 
-Vec2 ContactVelocity(const Square& square, Vec2 radius) {
+Vec2 ContactVelocity(const Rectangle& square, Vec2 radius) {
   return Add(square.velocity, Cross(square.angular_velocity, radius));
 }
 
-float ImpulseDenominator(const Square& square, Vec2 radius, Vec2 direction) {
+float ImpulseDenominator(const Rectangle& square, Vec2 radius, Vec2 direction) {
   const float radius_cross_direction = Cross(radius, direction);
   return InverseMass(square) + radius_cross_direction * radius_cross_direction *
                                    InverseInertia(square);
 }
 
-void ApplyImpulse(Square& square, Vec2 impulse, Vec2 radius) {
+void ApplyImpulse(Rectangle& square, Vec2 impulse, Vec2 radius) {
   square.velocity =
       Add(square.velocity, Multiply(impulse, InverseMass(square)));
   square.angular_velocity += Cross(radius, impulse) * InverseInertia(square);
 }
 
-std::array<Vec2, 2> GetAxes(const Square& square) {
+std::array<Vec2, 2> GetAxes(const Rectangle& square) {
   const float cosine = std::cos(square.angle);
   const float sine = std::sin(square.angle);
   return {{{cosine, sine}, {-sine, cosine}}};
 }
 
-std::array<Face, 4> GetFaces(const Square& square) {
+std::array<Face, 4> GetFaces(const Rectangle& square) {
   const std::array<Vec2, 4> vertices = GetVertices(square);
   const std::array<Vec2, 2> axes = GetAxes(square);
   return {{{vertices[0], vertices[1], Multiply(axes[1], -1.0f)},
@@ -116,7 +118,7 @@ std::array<Face, 4> GetFaces(const Square& square) {
            {vertices[3], vertices[0], Multiply(axes[0], -1.0f)}}};
 }
 
-Face FindAlignedFace(const Square& square, Vec2 direction) {
+Face FindAlignedFace(const Rectangle& square, Vec2 direction) {
   const std::array<Face, 4> faces = GetFaces(square);
   Face selected_face = faces.front();
   float best_alignment = Dot(selected_face.normal, direction);
@@ -130,7 +132,7 @@ Face FindAlignedFace(const Square& square, Vec2 direction) {
   return selected_face;
 }
 
-Face FindOpposingFace(const Square& square, Vec2 direction) {
+Face FindOpposingFace(const Rectangle& square, Vec2 direction) {
   const std::array<Face, 4> faces = GetFaces(square);
   Face selected_face = faces.front();
   float best_alignment = Dot(selected_face.normal, direction);
@@ -255,8 +257,8 @@ Vec2 GetContactPoint(const SupportFeature& feature_a,
              Multiply(normal, normal_coordinate));
 }
 
-std::optional<ContactManifold> FindContact(const Square& square_a,
-                                           const Square& square_b) {
+std::optional<ContactManifold> FindContact(const Rectangle& square_a,
+                                           const Rectangle& square_b) {
   const std::array<Vec2, 4> vertices_a = GetVertices(square_a);
   const std::array<Vec2, 4> vertices_b = GetVertices(square_b);
   const std::array<Vec2, 2> axes_a = GetAxes(square_a);
@@ -288,8 +290,8 @@ std::optional<ContactManifold> FindContact(const Square& square_a,
     collision_normal = Multiply(collision_normal, -1.0f);
   }
 
-  const Square& reference_square = reference_is_a ? square_a : square_b;
-  const Square& incident_square = reference_is_a ? square_b : square_a;
+  const Rectangle& reference_square = reference_is_a ? square_a : square_b;
+  const Rectangle& incident_square = reference_is_a ? square_b : square_a;
   const Vec2 reference_direction =
       reference_is_a ? collision_normal : Multiply(collision_normal, -1.0f);
   const Face reference_face =
@@ -341,12 +343,10 @@ float Restitution(float restitution, float normal_velocity,
   return std::clamp(restitution, 0.0f, 1.0f);
 }
 
-std::array<float, 2> ResolveNormalImpulses(Square& square_a, Square& square_b,
-                                           const ContactManifold& manifold,
-                                           const std::array<Vec2, 2>& radii_a,
-                                           const std::array<Vec2, 2>& radii_b,
-                                           float restitution,
-                                           bool allow_restitution) {
+std::array<float, 2> ResolveNormalImpulses(
+    Rectangle& square_a, Rectangle& square_b, const ContactManifold& manifold,
+    const std::array<Vec2, 2>& radii_a, const std::array<Vec2, 2>& radii_b,
+    float restitution, bool allow_restitution) {
   std::array<float, 2> normal_impulses{};
   std::array<float, 2> target_velocities{};
   std::array<float, 2> initial_velocities{};
@@ -424,7 +424,7 @@ std::array<float, 2> ResolveNormalImpulses(Square& square_a, Square& square_b,
   return normal_impulses;
 }
 
-void ResolveContact(Square& square_a, Square& square_b,
+void ResolveContact(Rectangle& square_a, Rectangle& square_b,
                     const ContactManifold& manifold, float restitution,
                     float friction, bool allow_restitution) {
   const float inverse_mass_a = InverseMass(square_a);
@@ -480,7 +480,7 @@ void ResolveContact(Square& square_a, Square& square_b,
       Add(square_b.position, Multiply(correction, inverse_mass_b));
 }
 
-void ResolveWallContact(Square& square, Vec2 inward_normal, float offset,
+void ResolveWallContact(Rectangle& square, Vec2 inward_normal, float offset,
                         float restitution, float friction,
                         bool allow_restitution) {
   const std::array<Vec2, 4> vertices = GetVertices(square);
@@ -536,9 +536,9 @@ void ResolveWallContact(Square& square, Vec2 inward_normal, float offset,
                         Multiply(inward_normal, offset - projection.minimum));
 }
 
-void ResolveWindowCollision(Square& square, float area_width, float area_height,
-                            float restitution, float friction,
-                            bool allow_restitution) {
+void ResolveWindowCollision(Rectangle& square, float area_width,
+                            float area_height, float restitution,
+                            float friction, bool allow_restitution) {
   ResolveWallContact(square, {1.0f, 0.0f}, 0.0f, restitution, friction,
                      allow_restitution);
   ResolveWallContact(square, {-1.0f, 0.0f}, -area_width, restitution, friction,
@@ -551,13 +551,22 @@ void ResolveWindowCollision(Square& square, float area_width, float area_height,
 
 }  // namespace
 
-std::array<Vec2, 4> GetVertices(const Square& square) {
-  const float half_size = square.size * 0.5f;
+Vec2 GetLinearAcceleration(const Rectangle& rectangle, Vec2 electric_field) {
+  if (rectangle.mass <= 0.0f) {
+    return {};
+  }
+  return Add({0.0f, kGravity},
+             Multiply(electric_field, rectangle.charge / rectangle.mass));
+}
+
+std::array<Vec2, 4> GetVertices(const Rectangle& square) {
+  const float half_width = square.width * 0.5f;
+  const float half_height = square.height * 0.5f;
   const float cosine = std::cos(square.angle);
   const float sine = std::sin(square.angle);
   const std::array<Vec2, 4> local_vertices = {
-      Vec2{-half_size, -half_size}, Vec2{half_size, -half_size},
-      Vec2{half_size, half_size}, Vec2{-half_size, half_size}};
+      Vec2{-half_width, -half_height}, Vec2{half_width, -half_height},
+      Vec2{half_width, half_height}, Vec2{-half_width, half_height}};
 
   std::array<Vec2, 4> vertices{};
   for (std::size_t i = 0; i < local_vertices.size(); ++i) {
@@ -568,17 +577,20 @@ std::array<Vec2, 4> GetVertices(const Square& square) {
   return vertices;
 }
 
-bool IsColliding(const Square& square_a, const Square& square_b) {
+bool IsColliding(const Rectangle& square_a, const Rectangle& square_b) {
   return FindContact(square_a, square_b).has_value();
 }
 
-void Update(std::vector<Square>& squares, float delta_time, float area_width,
-            float area_height, float restitution, float friction) {
-  for (Square& square : squares) {
+void Update(std::vector<Rectangle>& squares, float delta_time, float area_width,
+            float area_height, float restitution, float friction,
+            Vec2 electric_field) {
+  for (Rectangle& square : squares) {
     if (InverseMass(square) == 0.0f) {
       continue;
     }
-    square.velocity.y += kGravity * delta_time;
+    square.velocity = Add(
+        square.velocity,
+        Multiply(GetLinearAcceleration(square, electric_field), delta_time));
     if (square.fixed_rotation) {
       square.angular_velocity = 0.0f;
     } else {
@@ -605,7 +617,7 @@ void Update(std::vector<Square>& squares, float delta_time, float area_width,
       }
     }
 
-    for (Square& square : squares) {
+    for (Rectangle& square : squares) {
       ResolveWindowCollision(square, area_width, area_height, restitution,
                              friction, allow_restitution);
     }

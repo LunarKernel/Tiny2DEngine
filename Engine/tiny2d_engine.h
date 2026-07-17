@@ -11,22 +11,27 @@ struct Vec2 {
   float y{};
 };
 
-struct Square {
+struct Rectangle {
   float mass{1.0f};
   Vec2 position{};
   Vec2 velocity{};
   float angle{};
   float angular_velocity{};
-  float size{40.0f};
+  float width{40.0f};
+  float height{40.0f};
   bool fixed_rotation{};
+  float charge{};
 };
 
-std::array<Vec2, 4> GetVertices(const Square& square);
+Vec2 GetLinearAcceleration(const Rectangle& rectangle, Vec2 electric_field);
 
-bool IsColliding(const Square& square_a, const Square& square_b);
+std::array<Vec2, 4> GetVertices(const Rectangle& rectangle);
 
-void Update(std::vector<Square>& squares, float delta_time, float area_width,
-            float area_height, float restitution, float friction = 0.4f);
+bool IsColliding(const Rectangle& rectangle_a, const Rectangle& rectangle_b);
+
+void Update(std::vector<Rectangle>& rectangles, float delta_time,
+            float area_width, float area_height, float restitution,
+            float friction = 0.4f, Vec2 electric_field = {});
 
 }  // namespace tiny2d
 

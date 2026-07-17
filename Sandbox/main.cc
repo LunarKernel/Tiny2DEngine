@@ -14,93 +14,194 @@
 
 namespace {
 
-constexpr int kAreaWidth = 800;
-constexpr int kAreaHeight = 600;
-constexpr float kBlockSize = 32.0f;
-constexpr float kRampSize = 600.0f;
-constexpr float kRampAngle = -0.5235987756f;
-constexpr float kSpringAnchorX = 10.0f;
-constexpr float kSpringRestX = 350.0f;
+constexpr int kAreaWidth = 1200;
+constexpr int kAreaHeight = 800;
+constexpr float kUnitLength = 32.0f;
+constexpr float kDegreesToRadians = 0.01745329252f;
+constexpr float kSpringAnchorX = 16.0f;
+constexpr float kSpringRestX = 360.0f;
 constexpr float kSpringAmplitude = 10.0f;
 constexpr int kSpringCoilCount = 10;
 constexpr float kJunctionHysteresis = 0.05f;
+constexpr float kAirborneDistanceTolerance = 0.05f;
+constexpr float kAirborneSpeedTolerance = 0.01f;
+constexpr float kAirborneAccelerationTolerance = 0.0001f;
 constexpr float kPhysicsStep = 1.0f / 120.0f;
 constexpr double kMaxFrameTime = 0.25;
-constexpr std::array<int, 6> kSquareIndices = {0, 1, 2, 0, 2, 3};
+constexpr std::array<int, 6> kRectangleIndices = {0, 1, 2, 0, 2, 3};
 
-struct BlockConfig {
+struct BodyConfig {
   float surface_x;
   float mass;
   float downhill_speed;
+  float length_units;
+  bool charged{};
+  float charge{1.0f};
 };
 
 struct SimulationConfig {
   float friction{0.4f};
   float restitution{0.95f};
+  bool electric_field_enabled{};
+  float electric_field_strength{50.0f};
+  float electric_field_angle_degrees{};
+  bool ramp_enabled{true};
+  float ramp_angle_degrees{30.0f};
+  float ramp_width_percent{50.0f};
+  bool spring_enabled{true};
   float spring_stiffness{8.0f};
-  BlockConfig upper_block{720.0f, 1.0f, 280.0f};
-  BlockConfig lower_block{480.0f, 1.0f, 0.0f};
+  BodyConfig body_a{1080.0f, 1.0f, 280.0f, 1.0f, true, 1.0f};
+  BodyConfig body_b{720.0f, 4.0f, 0.0f, 1.0f, false, 1.0f};
 };
 
-tiny2d::Square CreateBlockOnRamp(const BlockConfig& config) {
-  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
+tiny2d::Vec2 GetElectricField(const SimulationConfig& config) {
+  if (!config.electric_field_enabled) {
+    return {};
+  }
+  const float angle = config.electric_field_angle_degrees * kDegreesToRadians;
+  return {config.electric_field_strength * std::cos(angle),
+          -config.electric_field_strength * std::sin(angle)};
+}
+
+float GetRampAngle(const SimulationConfig& config) {
+  return -config.ramp_angle_degrees * kDegreesToRadians;
+}
+
+float GetRampBottomX(const SimulationConfig& config) {
+  return static_cast<float>(kAreaWidth) *
+         (1.0f - config.ramp_width_percent / 100.0f);
+}
+
+float GetBodyWidth(const BodyConfig& config) {
+  return config.length_units * kUnitLength;
+}
+
+float GetMaximumBodyLengthUnits(const SimulationConfig& config) {
+  const float ramp_bottom_x = GetRampBottomX(config);
+  const float available_length =
+      config.ramp_enabled
+          ? std::min((static_cast<float>(kAreaWidth) - ramp_bottom_x) /
+                         std::cos(GetRampAngle(config)),
+                     ramp_bottom_x)
+          : static_cast<float>(kAreaWidth);
+  return available_length / kUnitLength;
+}
+
+tiny2d::Rectangle CreateBody(const BodyConfig& body_config,
+                             const SimulationConfig& simulation_config) {
+  const float width = GetBodyWidth(body_config);
+  const float half_height = kUnitLength * 0.5f;
+  if (!simulation_config.ramp_enabled) {
+    return {
+        body_config.mass,
+        {body_config.surface_x, static_cast<float>(kAreaHeight) - half_height},
+        {-body_config.downhill_speed, 0.0f},
+        0.0f,
+        0.0f,
+        width,
+        kUnitLength,
+        true,
+        body_config.charged ? body_config.charge : 0.0f};
+  }
+
+  const float ramp_angle = GetRampAngle(simulation_config);
   const float surface_y =
       static_cast<float>(kAreaHeight) +
-      (config.surface_x - ramp_bottom_x) * std::tan(kRampAngle);
-  const float half_size = kBlockSize * 0.5f;
+      (body_config.surface_x - GetRampBottomX(simulation_config)) *
+          std::tan(ramp_angle);
   const tiny2d::Vec2 position{
-      config.surface_x + std::sin(kRampAngle) * half_size,
-      surface_y - std::cos(kRampAngle) * half_size};
-  const tiny2d::Vec2 velocity{-std::cos(kRampAngle) * config.downhill_speed,
-                              -std::sin(kRampAngle) * config.downhill_speed};
-  return {config.mass, position, velocity, kRampAngle, 0.0f, kBlockSize, true};
+      body_config.surface_x + std::sin(ramp_angle) * half_height,
+      surface_y - std::cos(ramp_angle) * half_height};
+  const tiny2d::Vec2 velocity{
+      -std::cos(ramp_angle) * body_config.downhill_speed,
+      -std::sin(ramp_angle) * body_config.downhill_speed};
+  return {body_config.mass,
+          position,
+          velocity,
+          ramp_angle,
+          0.0f,
+          width,
+          kUnitLength,
+          true,
+          body_config.charged ? body_config.charge : 0.0f};
 }
 
 const char* GetConfigError(const SimulationConfig& config) {
-  const std::array<float, 9> values = {
+  const std::array<float, 17> values = {
       config.friction,
       config.restitution,
+      config.electric_field_strength,
+      config.electric_field_angle_degrees,
+      config.ramp_angle_degrees,
+      config.ramp_width_percent,
       config.spring_stiffness,
-      config.upper_block.surface_x,
-      config.upper_block.mass,
-      config.upper_block.downhill_speed,
-      config.lower_block.surface_x,
-      config.lower_block.mass,
-      config.lower_block.downhill_speed,
+      config.body_a.surface_x,
+      config.body_a.mass,
+      config.body_a.downhill_speed,
+      config.body_a.length_units,
+      config.body_a.charge,
+      config.body_b.surface_x,
+      config.body_b.mass,
+      config.body_b.downhill_speed,
+      config.body_b.length_units,
+      config.body_b.charge,
   };
   if (!std::all_of(values.begin(), values.end(),
                    [](float value) { return std::isfinite(value); })) {
     return "Every value must be a valid number.";
   }
-  if (tiny2d::IsColliding(CreateBlockOnRamp(config.upper_block),
-                          CreateBlockOnRamp(config.lower_block))) {
-    return "The blocks overlap. Move them farther apart before starting.";
+  if (tiny2d::IsColliding(CreateBody(config.body_a, config),
+                          CreateBody(config.body_b, config))) {
+    return "The bodies overlap. Move them farther apart before starting.";
   }
   return nullptr;
 }
 
-void DrawBlockControls(const char* title, BlockConfig* config, float minimum_x,
-                       float maximum_x) {
+void DrawBodyControls(const char* title, BodyConfig* body_config,
+                      const SimulationConfig& simulation_config) {
   ImGui::PushID(title);
   ImGui::TextUnformatted(title);
+  // V8 exposes unit blocks only. Keep length_units and the rectangle physics
+  // so the plank control can be restored in a later version.
+  body_config->length_units = 1.0f;
+  ImGui::TextDisabled("V8 uses a 1 x 1 block.");
+
+  const float half_width = GetBodyWidth(*body_config) * 0.5f;
+  const float minimum_x =
+      simulation_config.ramp_enabled
+          ? GetRampBottomX(simulation_config) +
+                std::cos(GetRampAngle(simulation_config)) * half_width
+          : half_width;
+  const float maximum_x =
+      std::max(minimum_x,
+               static_cast<float>(kAreaWidth) -
+                   (simulation_config.ramp_enabled
+                        ? std::cos(GetRampAngle(simulation_config)) * half_width
+                        : half_width));
+  body_config->surface_x =
+      std::clamp(body_config->surface_x, minimum_x, maximum_x);
   ImGui::TextDisabled(
-      "Ramp position: right is higher. Speed: positive is downhill.");
-  ImGui::SliderFloat("Ramp position", &config->surface_x, minimum_x, maximum_x,
-                     "%.0f", ImGuiSliderFlags_AlwaysClamp);
+      simulation_config.ramp_enabled
+          ? "Position: right is higher. Speed: positive is downhill."
+          : "Position is on the floor. Speed: positive moves left.");
   ImGui::SliderFloat(
-      "Mass", &config->mass, 0.01f, 1000.0f, "%.2f",
+      simulation_config.ramp_enabled ? "Ramp position" : "Floor position",
+      &body_config->surface_x, minimum_x, maximum_x, "%.1f",
+      ImGuiSliderFlags_AlwaysClamp);
+  ImGui::SliderFloat(
+      "Mass", &body_config->mass, 0.01f, 1000.0f, "%.2f",
       ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
-  ImGui::SliderFloat("Initial speed", &config->downhill_speed, -1000.0f,
-                     1000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+  ImGui::Checkbox("Charged", &body_config->charged);
+  ImGui::BeginDisabled(!body_config->charged);
+  ImGui::SliderFloat("Charge q", &body_config->charge, -10.0f, 10.0f, "%.2f",
+                     ImGuiSliderFlags_AlwaysClamp);
+  ImGui::EndDisabled();
+  ImGui::SliderFloat("Initial speed", &body_config->downhill_speed, -1000.0f,
+                     1000.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
   ImGui::PopID();
 }
 
 bool DrawSetupScreen(SimulationConfig* config) {
-  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
-  const float horizontal_margin = kBlockSize * 0.5f * std::cos(kRampAngle);
-  const float minimum_x = ramp_bottom_x + horizontal_margin;
-  const float maximum_x = static_cast<float>(kAreaWidth) - horizontal_margin;
-
   ImGuiIO& io = ImGui::GetIO();
   ImGui::SetNextWindowPos({0.0f, 0.0f});
   ImGui::SetNextWindowSize(io.DisplaySize);
@@ -113,6 +214,8 @@ bool DrawSetupScreen(SimulationConfig* config) {
   ImGui::TextWrapped(
       "Adjust the experiment, then press Start simulation. Restore defaults "
       "returns every value to a safe preset.");
+  ImGui::TextDisabled(
+      "Drag a slider, or Ctrl+click its value to type an exact number.");
   ImGui::Spacing();
 
   ImGui::TextUnformatted("System");
@@ -123,16 +226,39 @@ bool DrawSetupScreen(SimulationConfig* config) {
                      ImGuiSliderFlags_AlwaysClamp);
   ImGui::SliderFloat("Collision bounciness", &config->restitution, 0.0f, 1.0f,
                      "%.2f", ImGuiSliderFlags_AlwaysClamp);
+
+  ImGui::Checkbox("Enable electric field", &config->electric_field_enabled);
+  ImGui::BeginDisabled(!config->electric_field_enabled);
+  ImGui::TextDisabled("Direction: 0 degrees is right; 90 degrees is up.");
+  ImGui::SliderFloat("Electric field strength",
+                     &config->electric_field_strength, 0.0f, 500.0f, "%.1f",
+                     ImGuiSliderFlags_AlwaysClamp);
+  ImGui::SliderFloat("Electric field angle (degrees)",
+                     &config->electric_field_angle_degrees, -180.0f, 180.0f,
+                     "%.1f", ImGuiSliderFlags_AlwaysClamp);
+  ImGui::EndDisabled();
+
+  ImGui::Checkbox("Enable ramp", &config->ramp_enabled);
+  ImGui::BeginDisabled(!config->ramp_enabled);
+  ImGui::SliderFloat("Ramp angle (degrees)", &config->ramp_angle_degrees, 5.0f,
+                     45.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+  ImGui::SliderFloat("Ramp width (%)", &config->ramp_width_percent, 25.0f,
+                     60.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+  ImGui::EndDisabled();
+
+  ImGui::Checkbox("Enable left spring", &config->spring_enabled);
+  ImGui::BeginDisabled(!config->spring_enabled);
   ImGui::SliderFloat(
       "Spring strength", &config->spring_stiffness, 0.1f, 100.0f, "%.1f",
       ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
+  ImGui::EndDisabled();
 
   ImGui::Spacing();
   ImGui::Separator();
-  DrawBlockControls("Higher block", &config->upper_block, minimum_x, maximum_x);
+  DrawBodyControls("Body A", &config->body_a, *config);
   ImGui::Spacing();
   ImGui::Separator();
-  DrawBlockControls("Lower block", &config->lower_block, minimum_x, maximum_x);
+  DrawBodyControls("Body B", &config->body_b, *config);
   ImGui::Spacing();
 
   const float button_width =
@@ -161,7 +287,15 @@ bool DrawSetupScreen(SimulationConfig* config) {
 void CheckConfigValidation() {
   SimulationConfig config;
   assert(GetConfigError(config) == nullptr);
-  config.lower_block.surface_x = config.upper_block.surface_x;
+  assert(GetBodyWidth(config.body_a) == kUnitLength);
+  assert(GetBodyWidth(config.body_b) == kUnitLength);
+  assert(GetMaximumBodyLengthUnits(config) * kUnitLength <=
+         GetRampBottomX(config) + 0.001f);
+  config.ramp_enabled = false;
+  assert(GetConfigError(config) == nullptr);
+  assert(std::abs(GetMaximumBodyLengthUnits(config) * kUnitLength -
+                  static_cast<float>(kAreaWidth)) <= 0.001f);
+  config.body_b.surface_x = config.body_a.surface_x;
   assert(GetConfigError(config) != nullptr);
 }
 #endif
@@ -171,251 +305,331 @@ void ShowError(const char* message) {
                            nullptr);
 }
 
-tiny2d::Square CreateRamp() {
-  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
-  const float visible_midpoint_x =
-      (ramp_bottom_x + static_cast<float>(kAreaWidth)) * 0.5f;
-  const float visible_midpoint_y =
-      static_cast<float>(kAreaHeight) +
-      (visible_midpoint_x - ramp_bottom_x) * std::tan(kRampAngle);
-  const float half_size = kRampSize * 0.5f;
-  const tiny2d::Vec2 center{
-      visible_midpoint_x - std::sin(kRampAngle) * half_size,
-      visible_midpoint_y + std::cos(kRampAngle) * half_size};
+const char* GetAirborneError(const std::vector<tiny2d::Rectangle>& bodies,
+                             const SimulationConfig& config) {
+  if (!config.electric_field_enabled) {
+    return nullptr;
+  }
 
-  // ponytail: A large static square exposes one ramp face. Add rectangle
-  // dimensions only when the physics engine supports general box shapes.
-  return {0.0f, center, {}, kRampAngle, 0.0f, kRampSize, true};
+  const float ramp_angle = GetRampAngle(config);
+  const tiny2d::Vec2 electric_field = GetElectricField(config);
+  const std::size_t dynamic_body_count =
+      std::min<std::size_t>(2, bodies.size());
+  for (std::size_t i = 0; i < dynamic_body_count; ++i) {
+    const tiny2d::Rectangle& body = bodies[i];
+    tiny2d::Vec2 outward_normal{0.0f, -1.0f};
+    tiny2d::Vec2 surface_position{body.position.x,
+                                  static_cast<float>(kAreaHeight)};
+    if (config.ramp_enabled && std::abs(body.angle - ramp_angle) <= 0.001f) {
+      outward_normal = {std::sin(ramp_angle), -std::cos(ramp_angle)};
+      surface_position = {GetRampBottomX(config),
+                          static_cast<float>(kAreaHeight)};
+    }
+
+    const tiny2d::Vec2 target_position{
+        surface_position.x + outward_normal.x * body.height * 0.5f,
+        surface_position.y + outward_normal.y * body.height * 0.5f};
+    const float clearance =
+        (body.position.x - target_position.x) * outward_normal.x +
+        (body.position.y - target_position.y) * outward_normal.y;
+    const float outward_speed =
+        body.velocity.x * outward_normal.x + body.velocity.y * outward_normal.y;
+    const tiny2d::Vec2 acceleration =
+        tiny2d::GetLinearAcceleration(body, electric_field);
+    const float outward_acceleration =
+        acceleration.x * outward_normal.x + acceleration.y * outward_normal.y;
+    // A one-sided surface can push a body away, but cannot pull it back.
+    if (clearance > kAirborneDistanceTolerance ||
+        outward_speed > kAirborneSpeedTolerance ||
+        outward_acceleration > kAirborneAccelerationTolerance) {
+      return i == 0 ? "Body A cannot remain in contact with its supporting "
+                      "surface. Simulation stopped."
+                    : "Body B cannot remain in contact with its supporting "
+                      "surface. Simulation stopped.";
+    }
+  }
+  return nullptr;
 }
 
-void TransitionBlocksToFloor(std::vector<tiny2d::Square>& squares,
-                             float delta_time) {
-  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
-  const float half_size = kBlockSize * 0.5f;
+#ifndef NDEBUG
+void CheckAirborneDetection() {
+  SimulationConfig config;
+  config.electric_field_enabled = true;
+  config.electric_field_angle_degrees = 90.0f;
+  config.electric_field_strength = 50.0f;
+  std::vector<tiny2d::Rectangle> bodies = {
+      CreateBody(config.body_a, config),
+      CreateBody(config.body_b, config),
+  };
+  assert(GetAirborneError(bodies, config) == nullptr);
 
-  for (tiny2d::Square& square : squares) {
-    if (square.mass <= 0.0f || !square.fixed_rotation ||
-        std::abs(square.angle - kRampAngle) > 0.001f ||
-        square.velocity.x >= 0.0f) {
+  const float ramp_angle = GetRampAngle(config);
+  const tiny2d::Vec2 outward_normal{std::sin(ramp_angle),
+                                    -std::cos(ramp_angle)};
+  bodies[0].position.x += outward_normal.x * 0.1f;
+  bodies[0].position.y += outward_normal.y * 0.1f;
+  assert(GetAirborneError(bodies, config) != nullptr);
+
+  bodies[0] = CreateBody(config.body_a, config);
+  bodies[0].velocity.x += outward_normal.x * 0.1f;
+  bodies[0].velocity.y += outward_normal.y * 0.1f;
+  assert(GetAirborneError(bodies, config) != nullptr);
+
+  bodies[0] = CreateBody(config.body_a, config);
+  config.electric_field_strength = 200.0f;
+  assert(GetAirborneError(bodies, config) != nullptr);
+}
+#endif
+
+tiny2d::Rectangle CreateRamp(const SimulationConfig& config) {
+  const float ramp_angle = GetRampAngle(config);
+  const float ramp_bottom_x = GetRampBottomX(config);
+  const float run = static_cast<float>(kAreaWidth) - ramp_bottom_x;
+  const float ramp_length = run / std::cos(ramp_angle);
+  const float ramp_height = static_cast<float>(kAreaHeight);
+  const tiny2d::Vec2 top_midpoint{
+      ramp_bottom_x + run * 0.5f,
+      static_cast<float>(kAreaHeight) + run * 0.5f * std::tan(ramp_angle)};
+  const tiny2d::Vec2 center{
+      top_midpoint.x - std::sin(ramp_angle) * ramp_height * 0.5f,
+      top_midpoint.y + std::cos(ramp_angle) * ramp_height * 0.5f};
+  return {0.0f, center, {}, ramp_angle, 0.0f, ramp_length, ramp_height, true};
+}
+
+void TransitionBodiesToFloor(std::vector<tiny2d::Rectangle>& bodies,
+                             const SimulationConfig& config, float delta_time) {
+  const float ramp_angle = GetRampAngle(config);
+  const float ramp_bottom_x = GetRampBottomX(config);
+  const float cosine = std::cos(ramp_angle);
+  const float sine = std::sin(ramp_angle);
+
+  for (tiny2d::Rectangle& body : bodies) {
+    if (body.mass <= 0.0f || !body.fixed_rotation ||
+        std::abs(body.angle - ramp_angle) > 0.001f || body.velocity.x >= 0.0f) {
       continue;
     }
 
+    const float half_width = body.width * 0.5f;
+    const float half_height = body.height * 0.5f;
     const float front_corner_x =
-        square.position.x -
-        half_size * (std::cos(kRampAngle) + std::sin(kRampAngle));
+        body.position.x - half_width * cosine - half_height * sine;
     const float predicted_corner_x =
-        front_corner_x + square.velocity.x * delta_time;
+        front_corner_x + body.velocity.x * delta_time;
     if (predicted_corner_x > ramp_bottom_x - kJunctionHysteresis) {
       continue;
     }
 
-    const float speed_squared = square.velocity.x * square.velocity.x +
-                                square.velocity.y * square.velocity.y;
+    const float speed_squared =
+        body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y;
     const float speed = std::sqrt(speed_squared);
-    const float time_to_junction =
-        std::clamp((front_corner_x - ramp_bottom_x) / -square.velocity.x, 0.0f,
-                   delta_time);
+    const float time_to_junction = std::clamp(
+        (front_corner_x - ramp_bottom_x) / -body.velocity.x, 0.0f, delta_time);
     // Update() will still integrate the full step. This pre-offset makes its
     // final position include only the horizontal motion after the junction.
-    square.position = {ramp_bottom_x - half_size + speed * time_to_junction,
-                       static_cast<float>(kAreaHeight) - half_size};
-    square.velocity = {-speed, 0.0f};
-    square.angle = 0.0f;
-    square.angular_velocity = 0.0f;
+    body.position = {ramp_bottom_x - half_width + speed * time_to_junction,
+                     static_cast<float>(kAreaHeight) - half_height};
+    body.velocity = {-speed, 0.0f};
+    body.angle = 0.0f;
+    body.angular_velocity = 0.0f;
 
     const float transitioned_speed_squared =
-        square.velocity.x * square.velocity.x +
-        square.velocity.y * square.velocity.y;
+        body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y;
     const float expected_end_x =
-        ramp_bottom_x - half_size - speed * (delta_time - time_to_junction);
+        ramp_bottom_x - half_width - speed * (delta_time - time_to_junction);
     assert(std::abs(transitioned_speed_squared - speed_squared) <=
            std::max(1.0f, speed_squared) * 0.00001f);
-    assert(std::abs(square.position.x + square.velocity.x * delta_time -
+    assert(std::abs(body.position.x + body.velocity.x * delta_time -
                     expected_end_x) <= 0.0001f);
   }
 }
 
-void TransitionBlocksToRamp(std::vector<tiny2d::Square>& squares,
-                            float delta_time) {
-  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
+void TransitionBodiesToRamp(std::vector<tiny2d::Rectangle>& bodies,
+                            const SimulationConfig& config, float delta_time) {
+  const float ramp_angle = GetRampAngle(config);
+  const float ramp_bottom_x = GetRampBottomX(config);
   const float area_height = static_cast<float>(kAreaHeight);
-  const float cosine = std::cos(kRampAngle);
-  const float sine = std::sin(kRampAngle);
+  const float cosine = std::cos(ramp_angle);
+  const float sine = std::sin(ramp_angle);
 
-  for (tiny2d::Square& square : squares) {
-    if (square.mass <= 0.0f || !square.fixed_rotation ||
-        std::abs(square.angle) > 0.001f || square.velocity.x <= 0.0f) {
+  for (tiny2d::Rectangle& body : bodies) {
+    if (body.mass <= 0.0f || !body.fixed_rotation ||
+        std::abs(body.angle) > 0.001f || body.velocity.x <= 0.0f) {
       continue;
     }
 
-    const float half_size = square.size * 0.5f;
-    const float right_edge = square.position.x + half_size;
-    const float predicted_edge = right_edge + square.velocity.x * delta_time;
+    const float half_width = body.width * 0.5f;
+    const float half_height = body.height * 0.5f;
+    const float right_edge = body.position.x + half_width;
+    const float predicted_edge = right_edge + body.velocity.x * delta_time;
     if (predicted_edge < ramp_bottom_x + kJunctionHysteresis) {
       continue;
     }
 
-    const float speed_squared = square.velocity.x * square.velocity.x +
-                                square.velocity.y * square.velocity.y;
+    const float speed_squared =
+        body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y;
     const float speed = std::sqrt(speed_squared);
     const float time_to_junction = std::clamp(
-        (ramp_bottom_x - right_edge) / square.velocity.x, 0.0f, delta_time);
+        (ramp_bottom_x - right_edge) / body.velocity.x, 0.0f, delta_time);
     const tiny2d::Vec2 junction_position{
-        ramp_bottom_x + half_size * (cosine + sine),
-        area_height - half_size * (cosine - sine)};
-    square.velocity = {cosine * speed, sine * speed};
-    square.position = {
-        junction_position.x - square.velocity.x * time_to_junction,
-        junction_position.y - square.velocity.y * time_to_junction};
-    square.angle = kRampAngle;
-    square.angular_velocity = 0.0f;
+        ramp_bottom_x + half_width * cosine + half_height * sine,
+        area_height + half_width * sine - half_height * cosine};
+    body.velocity = {cosine * speed, sine * speed};
+    body.position = {junction_position.x - body.velocity.x * time_to_junction,
+                     junction_position.y - body.velocity.y * time_to_junction};
+    body.angle = ramp_angle;
+    body.angular_velocity = 0.0f;
 
     const float transitioned_speed_squared =
-        square.velocity.x * square.velocity.x +
-        square.velocity.y * square.velocity.y;
+        body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y;
     const float expected_end_x =
-        junction_position.x +
-        square.velocity.x * (delta_time - time_to_junction);
+        junction_position.x + body.velocity.x * (delta_time - time_to_junction);
     assert(std::abs(transitioned_speed_squared - speed_squared) <=
            std::max(1.0f, speed_squared) * 0.00001f);
-    assert(std::abs(square.position.x + square.velocity.x * delta_time -
+    assert(std::abs(body.position.x + body.velocity.x * delta_time -
                     expected_end_x) <= 0.0001f);
   }
 }
 
 #ifndef NDEBUG
 void CheckJunctionHysteresis() {
-  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
-  const float half_size = kBlockSize * 0.5f;
-  const float cosine = std::cos(kRampAngle);
-  const float sine = std::sin(kRampAngle);
+  const SimulationConfig config;
+  const float ramp_angle = GetRampAngle(config);
+  const float ramp_bottom_x = GetRampBottomX(config);
+  const float half_width = kUnitLength * 2.0f;
+  const float half_height = kUnitLength * 0.5f;
+  const float cosine = std::cos(ramp_angle);
+  const float sine = std::sin(ramp_angle);
   const tiny2d::Vec2 ramp_junction{
-      ramp_bottom_x + half_size * (cosine + sine),
-      static_cast<float>(kAreaHeight) - half_size * (cosine - sine)};
+      ramp_bottom_x + half_width * cosine + half_height * sine,
+      static_cast<float>(kAreaHeight) + half_width * sine -
+          half_height * cosine};
 
-  std::vector<tiny2d::Square> squares = {
+  std::vector<tiny2d::Rectangle> bodies = {
       {1.0f,
        ramp_junction,
        {-cosine, -sine},
-       kRampAngle,
+       ramp_angle,
        0.0f,
-       kBlockSize,
+       half_width * 2.0f,
+       half_height * 2.0f,
        true},
   };
-  TransitionBlocksToFloor(squares, kPhysicsStep);
-  assert(std::abs(squares[0].angle - kRampAngle) <= 0.001f);
+  TransitionBodiesToFloor(bodies, config, kPhysicsStep);
+  assert(std::abs(bodies[0].angle - ramp_angle) <= 0.001f);
 
-  squares[0].velocity = {-10.0f * cosine, -10.0f * sine};
-  TransitionBlocksToFloor(squares, kPhysicsStep);
-  assert(std::abs(squares[0].angle) <= 0.001f);
+  bodies[0].velocity = {-10.0f * cosine, -10.0f * sine};
+  TransitionBodiesToFloor(bodies, config, kPhysicsStep);
+  assert(std::abs(bodies[0].angle) <= 0.001f);
 
-  squares[0].velocity = {1.0f, 0.0f};
-  TransitionBlocksToRamp(squares, kPhysicsStep);
-  assert(std::abs(squares[0].angle) <= 0.001f);
+  bodies[0].velocity = {1.0f, 0.0f};
+  TransitionBodiesToRamp(bodies, config, kPhysicsStep);
+  assert(std::abs(bodies[0].angle) <= 0.001f);
 
-  squares[0].velocity = {10.0f, 0.0f};
-  TransitionBlocksToRamp(squares, kPhysicsStep);
-  assert(std::abs(squares[0].angle - kRampAngle) <= 0.001f);
+  bodies[0].velocity = {10.0f, 0.0f};
+  TransitionBodiesToRamp(bodies, config, kPhysicsStep);
+  assert(std::abs(bodies[0].angle - ramp_angle) <= 0.001f);
 }
 #endif
 
-void ConstrainBlocksToSurfaces(std::vector<tiny2d::Square>& squares) {
-  const float ramp_bottom_x = static_cast<float>(kAreaWidth) * 0.5f;
+void ConstrainBodiesToSurfaces(std::vector<tiny2d::Rectangle>& bodies,
+                               const SimulationConfig& config) {
+  const float ramp_angle = GetRampAngle(config);
+  const float ramp_bottom_x = GetRampBottomX(config);
 
   // ponytail: This scene uses an ideal guide constraint. Add a general
   // constraint solver only when other surface shapes need the same behavior.
-  for (tiny2d::Square& square : squares) {
-    if (square.mass <= 0.0f || !square.fixed_rotation) {
+  for (tiny2d::Rectangle& body : bodies) {
+    if (body.mass <= 0.0f || !body.fixed_rotation) {
       continue;
     }
 
     tiny2d::Vec2 normal{};
     tiny2d::Vec2 surface_position{};
-    if (std::abs(square.angle - kRampAngle) <= 0.001f) {
-      normal = {std::sin(kRampAngle), -std::cos(kRampAngle)};
+    if (config.ramp_enabled && std::abs(body.angle - ramp_angle) <= 0.001f) {
+      normal = {std::sin(ramp_angle), -std::cos(ramp_angle)};
       surface_position = {ramp_bottom_x, static_cast<float>(kAreaHeight)};
-    } else if (std::abs(square.angle) <= 0.001f) {
+    } else if (std::abs(body.angle) <= 0.001f) {
       normal = {0.0f, -1.0f};
-      surface_position = {square.position.x, static_cast<float>(kAreaHeight)};
+      surface_position = {body.position.x, static_cast<float>(kAreaHeight)};
     } else {
       continue;
     }
 
-    const float half_size = square.size * 0.5f;
+    const float half_height = body.height * 0.5f;
     const tiny2d::Vec2 target_position{
-        surface_position.x + normal.x * half_size,
-        surface_position.y + normal.y * half_size};
+        surface_position.x + normal.x * half_height,
+        surface_position.y + normal.y * half_height};
     const float position_error =
-        (square.position.x - target_position.x) * normal.x +
-        (square.position.y - target_position.y) * normal.y;
-    square.position.x -= normal.x * position_error;
-    square.position.y -= normal.y * position_error;
+        (body.position.x - target_position.x) * normal.x +
+        (body.position.y - target_position.y) * normal.y;
+    body.position.x -= normal.x * position_error;
+    body.position.y -= normal.y * position_error;
 
     const float normal_velocity =
-        square.velocity.x * normal.x + square.velocity.y * normal.y;
-    square.velocity.x -= normal.x * normal_velocity;
-    square.velocity.y -= normal.y * normal_velocity;
+        body.velocity.x * normal.x + body.velocity.y * normal.y;
+    body.velocity.x -= normal.x * normal_velocity;
+    body.velocity.y -= normal.y * normal_velocity;
 
     const float remaining_position_error =
-        (square.position.x - target_position.x) * normal.x +
-        (square.position.y - target_position.y) * normal.y;
+        (body.position.x - target_position.x) * normal.x +
+        (body.position.y - target_position.y) * normal.y;
     const float remaining_normal_velocity =
-        square.velocity.x * normal.x + square.velocity.y * normal.y;
+        body.velocity.x * normal.x + body.velocity.y * normal.y;
     assert(std::abs(remaining_position_error) <= 0.0001f);
     assert(std::abs(remaining_normal_velocity) <= 0.0001f);
   }
 }
 
-bool IsOnFloor(const tiny2d::Square& square) {
-  return square.mass > 0.0f && square.fixed_rotation &&
-         std::abs(square.angle) <= 0.001f;
+bool IsOnFloor(const tiny2d::Rectangle& body) {
+  return body.mass > 0.0f && body.fixed_rotation &&
+         std::abs(body.angle) <= 0.001f;
 }
 
-std::size_t FindSpringBlockIndex(const std::vector<tiny2d::Square>& squares) {
-  std::size_t block_index = squares.size();
+std::size_t FindSpringBodyIndex(const std::vector<tiny2d::Rectangle>& bodies) {
+  std::size_t body_index = bodies.size();
   float spring_end_x = kSpringRestX;
-  for (std::size_t i = 0; i < squares.size(); ++i) {
-    if (!IsOnFloor(squares[i])) {
+  for (std::size_t i = 0; i < bodies.size(); ++i) {
+    if (!IsOnFloor(bodies[i])) {
       continue;
     }
-    const float left_edge = squares[i].position.x - squares[i].size * 0.5f;
+    const float left_edge = bodies[i].position.x - bodies[i].width * 0.5f;
     if (left_edge < spring_end_x) {
       spring_end_x = left_edge;
-      block_index = i;
+      body_index = i;
     }
   }
-  return block_index;
+  return body_index;
 }
 
-void ApplySpringForce(std::vector<tiny2d::Square>& squares, float stiffness,
+void ApplySpringForce(std::vector<tiny2d::Rectangle>& bodies, float stiffness,
                       float delta_time) {
-  const std::size_t block_index = FindSpringBlockIndex(squares);
-  if (block_index == squares.size()) {
+  const std::size_t body_index = FindSpringBodyIndex(bodies);
+  if (body_index == bodies.size()) {
     return;
   }
 
-  tiny2d::Square& block = squares[block_index];
-  const float left_edge = block.position.x - block.size * 0.5f;
+  tiny2d::Rectangle& body = bodies[body_index];
+  const float left_edge = body.position.x - body.width * 0.5f;
   const float compression = kSpringRestX - left_edge;
   const float velocity_change =
-      stiffness * compression / block.mass * delta_time;
-  const float previous_velocity_x = block.velocity.x;
-  block.velocity.x += velocity_change;
-  assert(block.velocity.x >= previous_velocity_x);
+      stiffness * compression / body.mass * delta_time;
+  const float previous_velocity_x = body.velocity.x;
+  body.velocity.x += velocity_change;
+  assert(body.velocity.x >= previous_velocity_x);
 }
 
 void DrawSpring(SDL_Renderer* renderer,
-                const std::vector<tiny2d::Square>& squares) {
+                const std::vector<tiny2d::Rectangle>& bodies) {
   float spring_end_x = kSpringRestX;
-  const std::size_t block_index = FindSpringBlockIndex(squares);
-  if (block_index != squares.size()) {
+  const std::size_t body_index = FindSpringBodyIndex(bodies);
+  if (body_index != bodies.size()) {
     spring_end_x = std::clamp(
-        squares[block_index].position.x - squares[block_index].size * 0.5f,
+        bodies[body_index].position.x - bodies[body_index].width * 0.5f,
         kSpringAnchorX, kSpringRestX);
   }
 
   constexpr float kSpringY =
-      static_cast<float>(kAreaHeight) - kBlockSize * 0.5f;
+      static_cast<float>(kAreaHeight) - kUnitLength * 0.5f;
   std::array<SDL_FPoint, kSpringCoilCount + 2> points{};
   points.front() = {kSpringAnchorX, kSpringY};
   for (int i = 1; i <= kSpringCoilCount; ++i) {
@@ -430,24 +644,24 @@ void DrawSpring(SDL_Renderer* renderer,
   SDL_SetRenderDrawColor(renderer, 245, 200, 70, 255);
   SDL_RenderDrawLinesF(renderer, points.data(),
                        static_cast<int>(points.size()));
-  SDL_RenderDrawLineF(renderer, kSpringAnchorX, kSpringY - kBlockSize * 0.5f,
-                      kSpringAnchorX, kSpringY + kBlockSize * 0.5f);
-  SDL_RenderDrawLineF(renderer, spring_end_x, kSpringY - kBlockSize * 0.5f,
-                      spring_end_x, kSpringY + kBlockSize * 0.5f);
+  SDL_RenderDrawLineF(renderer, kSpringAnchorX, kSpringY - kUnitLength * 0.5f,
+                      kSpringAnchorX, kSpringY + kUnitLength * 0.5f);
+  SDL_RenderDrawLineF(renderer, spring_end_x, kSpringY - kUnitLength * 0.5f,
+                      spring_end_x, kSpringY + kUnitLength * 0.5f);
 }
 
-void DrawSquare(SDL_Renderer* renderer, const tiny2d::Square& square) {
-  const std::array<tiny2d::Vec2, 4> corners = tiny2d::GetVertices(square);
+void DrawRectangle(SDL_Renderer* renderer, const tiny2d::Rectangle& rectangle) {
+  const std::array<tiny2d::Vec2, 4> corners = tiny2d::GetVertices(rectangle);
   std::array<SDL_Vertex, 4> vertices{};
-  const SDL_Color color = square.mass > 0.0f ? SDL_Color{255, 100, 100, 255}
-                                             : SDL_Color{90, 110, 120, 255};
+  const SDL_Color color = rectangle.mass > 0.0f ? SDL_Color{255, 100, 100, 255}
+                                                : SDL_Color{90, 110, 120, 255};
   for (std::size_t i = 0; i < corners.size(); ++i) {
     vertices[i].position = {corners[i].x, corners[i].y};
     vertices[i].color = color;
   }
-  SDL_RenderGeometry(renderer, nullptr, vertices.data(),
-                     static_cast<int>(vertices.size()), kSquareIndices.data(),
-                     static_cast<int>(kSquareIndices.size()));
+  SDL_RenderGeometry(
+      renderer, nullptr, vertices.data(), static_cast<int>(vertices.size()),
+      kRectangleIndices.data(), static_cast<int>(kRectangleIndices.size()));
 }
 
 }  // namespace
@@ -517,11 +731,12 @@ int main(int argc, char* argv[]) {
 
 #ifndef NDEBUG
   CheckConfigValidation();
+  CheckAirborneDetection();
   CheckJunctionHysteresis();
 #endif
 
   SimulationConfig config;
-  std::vector<tiny2d::Square> squares;
+  std::vector<tiny2d::Rectangle> bodies;
   bool simulation_started = false;
 
   bool running = true;
@@ -551,12 +766,14 @@ int main(int argc, char* argv[]) {
       accumulated_time = 0.0;
       if (DrawSetupScreen(&config)) {
         assert(GetConfigError(config) == nullptr);
-        squares = {
-            CreateBlockOnRamp(config.upper_block),
-            CreateBlockOnRamp(config.lower_block),
-            CreateRamp(),
+        bodies = {
+            CreateBody(config.body_a, config),
+            CreateBody(config.body_b, config),
         };
-        assert(squares.size() == 3);
+        if (config.ramp_enabled) {
+          bodies.push_back(CreateRamp(config));
+        }
+        assert(bodies.size() == (config.ramp_enabled ? 3 : 2));
         simulation_started = true;
       }
     } else {
@@ -567,15 +784,31 @@ int main(int argc, char* argv[]) {
       accumulated_time += frame_time;
 
       while (accumulated_time >= kPhysicsStep) {
-        TransitionBlocksToFloor(squares, kPhysicsStep);
-        ApplySpringForce(squares, config.spring_stiffness, kPhysicsStep);
-        TransitionBlocksToRamp(squares, kPhysicsStep);
-        tiny2d::Update(squares, kPhysicsStep, static_cast<float>(kAreaWidth),
+        if (config.ramp_enabled) {
+          TransitionBodiesToFloor(bodies, config, kPhysicsStep);
+        }
+        if (config.spring_enabled) {
+          ApplySpringForce(bodies, config.spring_stiffness, kPhysicsStep);
+        }
+        if (config.ramp_enabled) {
+          TransitionBodiesToRamp(bodies, config, kPhysicsStep);
+        }
+        tiny2d::Update(bodies, kPhysicsStep, static_cast<float>(kAreaWidth),
                        static_cast<float>(kAreaHeight), config.restitution,
-                       config.friction);
-        TransitionBlocksToFloor(squares, 0.0f);
-        TransitionBlocksToRamp(squares, 0.0f);
-        ConstrainBlocksToSurfaces(squares);
+                       config.friction, GetElectricField(config));
+        if (config.ramp_enabled) {
+          TransitionBodiesToFloor(bodies, config, 0.0f);
+          TransitionBodiesToRamp(bodies, config, 0.0f);
+        }
+        const char* airborne_error = GetAirborneError(bodies, config);
+        if (airborne_error != nullptr) {
+          simulation_started = false;
+          bodies.clear();
+          accumulated_time = 0.0;
+          ShowError(airborne_error);
+          break;
+        }
+        ConstrainBodiesToSurfaces(bodies, config);
         accumulated_time -= kPhysicsStep;
       }
     }
@@ -585,9 +818,11 @@ int main(int argc, char* argv[]) {
     SDL_RenderClear(renderer);
 
     if (simulation_started) {
-      DrawSpring(renderer, squares);
-      for (const tiny2d::Square& square : squares) {
-        DrawSquare(renderer, square);
+      if (config.spring_enabled) {
+        DrawSpring(renderer, bodies);
+      }
+      for (const tiny2d::Rectangle& body : bodies) {
+        DrawRectangle(renderer, body);
       }
     }
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
