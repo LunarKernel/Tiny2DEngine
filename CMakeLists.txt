@@ -19,6 +19,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(SDL2 CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 add_library(Tiny2DEngine STATIC
     Engine/tiny2d_engine.cc
@@ -30,13 +31,14 @@ target_include_directories(Tiny2DEngine PUBLIC
 
 target_link_libraries(Tiny2DEngine PUBLIC SDL2::SDL2)
 
-add_executable(Sandbox
+add_executable(Sandbox WIN32
     Sandbox/main.cc
 )
 
 target_link_libraries(Sandbox PRIVATE
     SDL2::SDL2main
     Tiny2DEngine
+    imgui::imgui
 )
 
 enable_testing()
