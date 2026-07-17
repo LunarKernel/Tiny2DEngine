@@ -1,6 +1,7 @@
 #include <SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <iostream>
@@ -14,21 +15,23 @@ namespace {
 constexpr std::size_t kMaxSquares = 8;
 constexpr int kMaxSpawnAttempts = 100;
 constexpr float kSquareSize = 40.0f;
+constexpr float kPhysicsStep = 1.0f / 120.0f;
+constexpr double kMaxFrameTime = 0.25;
+constexpr std::array<int, 6> kSquareIndices = {0, 1, 2, 0, 2, 3};
 
 void TrySpawnSquare(std::vector<tiny2d::Square>& squares, int area_width,
                     int area_height, std::mt19937& random_engine) {
+  const float half_size = kSquareSize * 0.5f;
   std::uniform_real_distribution<float> x_distribution(
-      0.0f, static_cast<float>(area_width) - kSquareSize);
+      half_size, static_cast<float>(area_width) - half_size);
   std::uniform_real_distribution<float> y_distribution(
-      0.0f, static_cast<float>(area_height) - kSquareSize);
+      half_size, static_cast<float>(area_height) - half_size);
 
   for (int attempt = 0; attempt < kMaxSpawnAttempts; ++attempt) {
-    tiny2d::Square candidate{1.0f,
-                             x_distribution(random_engine),
-                             y_distribution(random_engine),
-                             0.0f,
-                             0.0f,
-                             kSquareSize};
+    tiny2d::Square candidate{
+        1.0f, {x_distribution(random_engine), y_distribution(random_engine)},
+        {},   0.0f,
+        0.0f, kSquareSize};
 
     bool overlaps = false;
     for (const tiny2d::Square& square : squares) {
@@ -43,6 +46,18 @@ void TrySpawnSquare(std::vector<tiny2d::Square>& squares, int area_width,
       return;
     }
   }
+}
+
+void DrawSquare(SDL_Renderer* renderer, const tiny2d::Square& square) {
+  const std::array<tiny2d::Vec2, 4> corners = tiny2d::GetVertices(square);
+  std::array<SDL_Vertex, 4> vertices{};
+  for (std::size_t i = 0; i < corners.size(); ++i) {
+    vertices[i].position = {corners[i].x, corners[i].y};
+    vertices[i].color = {255, 100, 100, 255};
+  }
+  SDL_RenderGeometry(renderer, nullptr, vertices.data(),
+                     static_cast<int>(vertices.size()), kSquareIndices.data(),
+                     static_cast<int>(kSquareIndices.size()));
 }
 
 }  // namespace
@@ -77,8 +92,8 @@ int main(int argc, char* argv[]) {
   }
 
   std::vector<tiny2d::Square> squares = {
-      {1.0f, 100.0f, 100.0f, 180.0f, 0.0f, 40.0f},
-      {1.0f, 500.0f, 100.0f, -120.0f, 0.0f, 40.0f},
+      {1.0f, {120.0f, 120.0f}, {180.0f, 0.0f}, 0.0f, 0.0f, 40.0f},
+      {1.0f, {520.0f, 140.0f}, {-120.0f, 0.0f}, 0.0f, 0.0f, 40.0f},
   };
   squares.reserve(kMaxSquares);
 
@@ -87,6 +102,7 @@ int main(int argc, char* argv[]) {
   bool running = true;
   const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
   Uint64 previous_time = SDL_GetPerformanceCounter();
+  double accumulated_time = 0.0;
 
   while (running) {
     // 1. Process events.
@@ -103,26 +119,28 @@ int main(int argc, char* argv[]) {
       }
     }
 
-    // 2. Get delta time.
+    // 2. Accumulate real time for fixed physics steps.
     const Uint64 current_time = SDL_GetPerformanceCounter();
-    float delta_time =
-        static_cast<float>((current_time - previous_time) / frequency);
+    const double frame_time =
+        std::min(static_cast<double>(current_time - previous_time) / frequency,
+                 kMaxFrameTime);
     previous_time = current_time;
-    delta_time = std::min(delta_time, 0.05f);
+    accumulated_time += frame_time;
 
-    // 3. Update square positions.
-    tiny2d::Update(squares, delta_time, static_cast<float>(kAreaWidth),
-                   static_cast<float>(kAreaHeight), 0.95f);
+    // 3. Update physics at a stable 120 Hz.
+    while (accumulated_time >= kPhysicsStep) {
+      tiny2d::Update(squares, kPhysicsStep, static_cast<float>(kAreaWidth),
+                     static_cast<float>(kAreaHeight), 0.95f);
+      accumulated_time -= kPhysicsStep;
+    }
 
     // 4. Clear the screen.
     SDL_SetRenderDrawColor(renderer, 20, 20, 20, 255);
     SDL_RenderClear(renderer);
 
-    // 5. Draw the squares.
+    // 5. Draw the rotated squares.
     for (const tiny2d::Square& square : squares) {
-      SDL_FRect rect{square.x, square.y, square.size, square.size};
-      SDL_SetRenderDrawColor(renderer, 255, 100, 100, 255);
-      SDL_RenderFillRectF(renderer, &rect);
+      DrawSquare(renderer, square);
     }
 
     // 6. Present the rendered frame.

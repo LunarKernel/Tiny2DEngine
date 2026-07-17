@@ -4,8 +4,11 @@
     {
       "name": "msvc-x64",
       "displayName": "MSVC x64",
-      "generator": "Visual Studio 18 2026",
-      "architecture": "x64",
+      "generator": "Ninja Multi-Config",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "C:/Program Files/Microsoft Visual Studio/18/Community/VC/vcpkg/scripts/buildsystems/vcpkg.cmake",

@@ -38,3 +38,13 @@ target_link_libraries(Sandbox PRIVATE
     SDL2::SDL2main
     Tiny2DEngine
 )
+
+enable_testing()
+
+add_executable(Tiny2DEngineTests
+    Engine/tiny2d_engine_test.cc
+)
+
+target_link_libraries(Tiny2DEngineTests PRIVATE Tiny2DEngine)
+
+add_test(NAME Tiny2DEngineTests COMMAND Tiny2DEngineTests)

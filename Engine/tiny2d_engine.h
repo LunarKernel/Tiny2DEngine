@@ -1,30 +1,28 @@
 #ifndef TINY2DENGINE_ENGINE_TINY2D_ENGINE_H_
 #define TINY2DENGINE_ENGINE_TINY2D_ENGINE_H_
 
+#include <array>
 #include <vector>
 
 namespace tiny2d {
 
-struct Square {
-  float mass{1.0f};
+struct Vec2 {
   float x{};
   float y{};
-  float vx{};
-  float vy{};
+};
+
+struct Square {
+  float mass{1.0f};
+  Vec2 position{};
+  Vec2 velocity{};
+  float angle{};
+  float angular_velocity{};
   float size{40.0f};
 };
 
-void ApplyGravity(Square& square, float gravity, float delta_time);
-
-void UpdatePosition(Square& square, float delta_time);
+std::array<Vec2, 4> GetVertices(const Square& square);
 
 bool IsColliding(const Square& square_a, const Square& square_b);
-
-void ResolveWindowCollision(Square& square, float area_width, float area_height,
-                            float coefficient);
-
-void ResolveSquareCollision(Square& square_a, Square& square_b,
-                            float coefficient);
 
 void Update(std::vector<Square>& squares, float delta_time, float area_width,
             float area_height, float coefficient);
