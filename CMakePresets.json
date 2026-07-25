@@ -1,18 +1,59 @@
 {
   "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
   "configurePresets": [
+    {
+      "name": "vcpkg-base",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "TINY2D_WARNINGS_AS_ERRORS": false,
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
     {
       "name": "msvc-x64",
       "displayName": "MSVC x64",
+      "inherits": "vcpkg-base",
       "generator": "Ninja Multi-Config",
       "architecture": {
         "value": "x64",
         "strategy": "external"
       },
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build"
+    },
+    {
+      "name": "msvc-x64-asan",
+      "displayName": "MSVC x64 + AddressSanitizer",
+      "inherits": "msvc-x64",
+      "binaryDir": "${sourceDir}/build/asan",
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "C:/Program Files/Microsoft Visual Studio/18/Community/VC/vcpkg/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_TARGET_TRIPLET": "x64-windows"
+        "TINY2D_ENABLE_ASAN": true
+      }
+    },
+    {
+      "name": "msvc-x64-tidy",
+      "displayName": "MSVC x64 + clang-tidy",
+      "inherits": "msvc-x64",
+      "binaryDir": "${sourceDir}/build/tidy",
+      "cacheVariables": {
+        "CMAKE_CXX_CLANG_TIDY": "$env{VSINSTALLDIR}VC/Tools/Llvm/x64/bin/clang-tidy.exe;--extra-arg=/EHsc"
+      }
+    },
+    {
+      "name": "ci-windows",
+      "displayName": "CI Windows VS2022",
+      "inherits": "vcpkg-base",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/ci",
+      "cacheVariables": {
+        "TINY2D_WARNINGS_AS_ERRORS": true
       }
     }
   ],
@@ -28,6 +69,18 @@
       "displayName": "Release",
       "configurePreset": "msvc-x64",
       "configuration": "Release"
+    },
+    {
+      "name": "asan",
+      "displayName": "AddressSanitizer",
+      "configurePreset": "msvc-x64-asan",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "tidy",
+      "displayName": "clang-tidy",
+      "configurePreset": "msvc-x64-tidy",
+      "configuration": "Debug"
     }
   ],
   "testPresets": [
@@ -45,6 +98,15 @@
       "displayName": "Test Release",
       "configurePreset": "msvc-x64",
       "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test-asan",
+      "displayName": "Test AddressSanitizer",
+      "configurePreset": "msvc-x64-asan",
+      "configuration": "RelWithDebInfo",
       "output": {
         "outputOnFailure": true
       }

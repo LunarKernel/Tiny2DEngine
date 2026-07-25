@@ -1,11 +1,38 @@
-#define SDL_MAIN_HANDLED
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <vector>
 
-#include "rotation_pendulum_simulation.cc"
+#include "rotation_pendulum_model.h"
 
 namespace {
+
+using tiny2d::sandbox::CalculatePendulumDerived;
+using tiny2d::sandbox::FindPendulumState;
+using tiny2d::sandbox::GetPendulumConfigError;
+using tiny2d::sandbox::GetPendulumStateError;
+using tiny2d::sandbox::GetSmallAnglePeriod;
+using tiny2d::sandbox::IsPendulumDerivedFinite;
+using tiny2d::sandbox::kMaximumChargeMagnitude;
+using tiny2d::sandbox::kMaximumDamping;
+using tiny2d::sandbox::kMaximumElectricField;
+using tiny2d::sandbox::kMaximumInitialAngularSpeed;
+using tiny2d::sandbox::kMaximumMass;
+using tiny2d::sandbox::kMaximumRodLength;
+using tiny2d::sandbox::kMinimumMass;
+using tiny2d::sandbox::kMinimumRodLength;
+using tiny2d::sandbox::kPendulumPhysicsStep;
+using tiny2d::sandbox::kPendulumPi;
+using tiny2d::sandbox::kPendulumRadiansToDegrees;
+using tiny2d::sandbox::MakeInitialPendulumState;
+using tiny2d::sandbox::PendulumConfig;
+using tiny2d::sandbox::PendulumDerived;
+using tiny2d::sandbox::PendulumState;
+using tiny2d::sandbox::StepPendulum;
 
 std::size_t check_count = 0;
 
@@ -363,6 +390,11 @@ void TestValidationNonFiniteAndDangerousInputs() {
   state = valid_state;
   CHECK(!StepPendulum(config, 0.0f, &state));
   CHECK(!StepPendulum(config, std::numeric_limits<float>::quiet_NaN(), &state));
+  PendulumConfig invalid_config = config;
+  invalid_config.gravity_m_s2 = 9.81f;
+  state = valid_state;
+  CHECK(!StepPendulum(invalid_config, kPendulumPhysicsStep, &state));
+  CHECK(state.time_seconds == valid_state.time_seconds);
 }
 
 void TestLongRunFiniteAndDeterministic() {

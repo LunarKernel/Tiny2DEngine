@@ -1,33 +1,46 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.21)
 
-file(TO_CMAKE_PATH "$ENV{VSINSTALLDIR}" _vs_install_dir)
-set(_vcpkg_toolchain "${_vs_install_dir}/VC/vcpkg/scripts/buildsystems/vcpkg.cmake")
-if(NOT EXISTS "${_vcpkg_toolchain}")
-    set(_vcpkg_toolchain "C:/Program Files/Microsoft Visual Studio/18/Community/VC/vcpkg/scripts/buildsystems/vcpkg.cmake")
-endif()
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "${_vcpkg_toolchain}")
-    # ponytail: Visual Studio legacy-mode fallback; presets remain the portable entry point.
-    set(CMAKE_TOOLCHAIN_FILE "${_vcpkg_toolchain}" CACHE FILEPATH "vcpkg toolchain file")
-endif()
-unset(_vcpkg_toolchain)
-unset(_vs_install_dir)
+project(Tiny2DEngine VERSION 2.0.0 LANGUAGES CXX)
 
-project(Tiny2DEngine LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+include(CTest)
+
+option(TINY2D_BUILD_SANDBOX "Build the interactive Sandbox application" ON)
+option(TINY2D_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(TINY2D_ENABLE_ASAN "Enable AddressSanitizer" OFF)
+
+if(TINY2D_ENABLE_ASAN)
+  if(MSVC)
+    add_compile_options(/fsanitize=address)
+    add_link_options(/INCREMENTAL:NO)
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+  else()
+    message(FATAL_ERROR "AddressSanitizer is unsupported by this compiler")
+  endif()
+endif()
 
 function(tiny2d_enable_warnings target)
   if(MSVC)
-    target_compile_options(${target} PRIVATE /W4 /permissive-)
+    target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8
+                                             /Zc:__cplusplus)
+    if(TINY2D_WARNINGS_AS_ERRORS)
+      target_compile_options(${target} PRIVATE /WX)
+    endif()
   else()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    if(TINY2D_WARNINGS_AS_ERRORS)
+      target_compile_options(${target} PRIVATE -Werror)
+    endif()
   endif()
 endfunction()
 
-find_package(SDL2 CONFIG REQUIRED)
-find_package(imgui CONFIG REQUIRED)
+if(TINY2D_BUILD_SANDBOX)
+  find_package(SDL2 CONFIG REQUIRED)
+  find_package(imgui CONFIG REQUIRED)
+endif()
 
 add_library(Tiny2DEngine STATIC
     Engine/tiny2d_engine.cc
@@ -37,60 +50,82 @@ target_include_directories(Tiny2DEngine PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/Engine
 )
 
-target_link_libraries(Tiny2DEngine PUBLIC SDL2::SDL2)
+target_compile_features(Tiny2DEngine PUBLIC cxx_std_17)
 tiny2d_enable_warnings(Tiny2DEngine)
 
-add_executable(Sandbox WIN32
-    Sandbox/main.cc
-    Sandbox/incline_spring_simulation.cc
-    Sandbox/rotation_pendulum_simulation.cc
-)
+if(TINY2D_BUILD_SANDBOX OR BUILD_TESTING)
+  add_library(Tiny2DSimulationModels STATIC
+      Sandbox/incline_spring_model.cc
+      Sandbox/rolling_disk_model.cc
+      Sandbox/rotation_pendulum_model.cc
+  )
 
-target_link_libraries(Sandbox PRIVATE
-    SDL2::SDL2main
-    Tiny2DEngine
-    imgui::imgui
-)
-tiny2d_enable_warnings(Sandbox)
+  target_include_directories(Tiny2DSimulationModels PUBLIC
+      ${CMAKE_CURRENT_SOURCE_DIR}/Sandbox
+  )
 
-enable_testing()
+  target_link_libraries(Tiny2DSimulationModels PUBLIC Tiny2DEngine)
+  target_compile_features(Tiny2DSimulationModels PUBLIC cxx_std_17)
+  tiny2d_enable_warnings(Tiny2DSimulationModels)
+endif()
 
-add_executable(Tiny2DEngineTests
-    Engine/tiny2d_engine_test.cc
-)
+if(TINY2D_BUILD_SANDBOX)
+  add_executable(Sandbox WIN32
+      Sandbox/main.cc
+      Sandbox/incline_spring_simulation.cc
+      Sandbox/rolling_disk_simulation.cc
+      Sandbox/rotation_pendulum_simulation.cc
+  )
 
-target_link_libraries(Tiny2DEngineTests PRIVATE Tiny2DEngine)
-tiny2d_enable_warnings(Tiny2DEngineTests)
+  target_link_libraries(Sandbox PRIVATE
+      SDL2::SDL2main
+      SDL2::SDL2
+      Tiny2DSimulationModels
+      imgui::imgui
+  )
+  tiny2d_enable_warnings(Sandbox)
+endif()
 
-add_test(NAME Tiny2DEngineTests COMMAND Tiny2DEngineTests)
-set_tests_properties(Tiny2DEngineTests PROPERTIES TIMEOUT 30)
+if(BUILD_TESTING)
+  add_executable(Tiny2DEngineTests
+      Engine/tiny2d_engine_test.cc
+  )
 
-# Test the exact headless V9 model helpers used by the SDL application. The
-# test translation unit includes the implementation to avoid copying formulas.
-add_executable(Tiny2DSimulationTests
-    Sandbox/simulation_model_test.cc
-)
+  target_link_libraries(Tiny2DEngineTests PRIVATE Tiny2DEngine)
+  tiny2d_enable_warnings(Tiny2DEngineTests)
 
-target_link_libraries(Tiny2DSimulationTests PRIVATE
-    SDL2::SDL2
-    Tiny2DEngine
-    imgui::imgui
-)
-tiny2d_enable_warnings(Tiny2DSimulationTests)
+  add_test(NAME Tiny2DEngineTests COMMAND Tiny2DEngineTests)
+  set_tests_properties(Tiny2DEngineTests PROPERTIES TIMEOUT 30)
 
-add_test(NAME Tiny2DSimulationTests COMMAND Tiny2DSimulationTests)
-set_tests_properties(Tiny2DSimulationTests PROPERTIES TIMEOUT 30)
+  add_executable(Tiny2DSimulationTests
+      Sandbox/simulation_model_test.cc
+  )
 
-add_executable(Tiny2DRotationPendulumTests
-    Sandbox/rotation_pendulum_test.cc
-)
+  target_link_libraries(Tiny2DSimulationTests PRIVATE Tiny2DSimulationModels)
+  tiny2d_enable_warnings(Tiny2DSimulationTests)
 
-target_link_libraries(Tiny2DRotationPendulumTests PRIVATE
-    SDL2::SDL2
-    Tiny2DEngine
-    imgui::imgui
-)
-tiny2d_enable_warnings(Tiny2DRotationPendulumTests)
+  add_test(NAME Tiny2DSimulationTests COMMAND Tiny2DSimulationTests)
+  set_tests_properties(Tiny2DSimulationTests PROPERTIES TIMEOUT 30)
 
-add_test(NAME Tiny2DRotationPendulumTests COMMAND Tiny2DRotationPendulumTests)
-set_tests_properties(Tiny2DRotationPendulumTests PROPERTIES TIMEOUT 30)
+  add_executable(Tiny2DRotationPendulumTests
+      Sandbox/rotation_pendulum_test.cc
+  )
+
+  target_link_libraries(Tiny2DRotationPendulumTests
+      PRIVATE Tiny2DSimulationModels
+  )
+  tiny2d_enable_warnings(Tiny2DRotationPendulumTests)
+
+  add_test(NAME Tiny2DRotationPendulumTests COMMAND Tiny2DRotationPendulumTests)
+  set_tests_properties(Tiny2DRotationPendulumTests PROPERTIES TIMEOUT 30)
+
+  add_executable(Tiny2DRollingDiskTests
+      Sandbox/rolling_disk_test.cc
+  )
+
+  target_link_libraries(Tiny2DRollingDiskTests PRIVATE Tiny2DSimulationModels)
+  tiny2d_enable_warnings(Tiny2DRollingDiskTests)
+
+  add_test(NAME Tiny2DRollingDiskTests COMMAND Tiny2DRollingDiskTests)
+  set_tests_properties(Tiny2DRollingDiskTests PROPERTIES TIMEOUT 30)
+endif()

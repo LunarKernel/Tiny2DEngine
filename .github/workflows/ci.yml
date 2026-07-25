@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: VS2022 ${{ matrix.configuration }}
+    runs-on: windows-2022
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check formatting
+        if: matrix.configuration == 'Debug'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -products * -property installationPath
+          $clangFormat = Join-Path $vsInstall 'VC\Tools\Llvm\x64\bin\clang-format.exe'
+          $files = git ls-files '*.cc' '*.h'
+          & $clangFormat --dry-run --Werror $files
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
+          cmake --preset ci-windows
+
+      - name: Build
+        run: cmake --build build/ci --config ${{ matrix.configuration }} --parallel
+
+      - name: Test
+        run: ctest --test-dir build/ci -C ${{ matrix.configuration }} --output-on-failure
+
+  analysis:
+    name: ${{ matrix.name }}
+    runs-on: windows-2022
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: AddressSanitizer
+            configure_preset: msvc-x64-asan
+            build_preset: asan
+            build_directory: build/asan
+            configuration: RelWithDebInfo
+          - name: clang-tidy
+            configure_preset: msvc-x64-tidy
+            build_preset: tidy
+            build_directory: build/tidy
+            configuration: Debug
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Configure, build, and test
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -products * -property installationPath
+          $devShell = Join-Path $vsInstall 'Common7\Tools\Launch-VsDevShell.ps1'
+          & $devShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
+          cmake --preset ${{ matrix.configure_preset }}
+          cmake --build --preset ${{ matrix.build_preset }} --parallel
+          ctest --test-dir ${{ matrix.build_directory }} -C ${{ matrix.configuration }} --output-on-failure

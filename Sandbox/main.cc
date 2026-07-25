@@ -16,6 +16,7 @@ enum class ModelChoice {
   kNone,
   kInclineSpring,
   kRotationPendulum,
+  kRollingDisk,
   kQuit,
 };
 
@@ -81,6 +82,16 @@ ModelChoice ChooseModel(SDL_Renderer* renderer) {
     }
 
     ImGui::Spacing();
+    ImGui::TextUnformatted("V11 RollLab: Sliding / Rolling Transition");
+    ImGui::TextWrapped(
+        "A disk or hoop on an incline with static and kinetic friction. "
+        "Observe slipping, pure rolling, energy transfer, and electric-field "
+        "effects.");
+    if (ImGui::Button("Open V11 RollLab", {panel_width, 74.0f})) {
+      choice = ModelChoice::kRollingDisk;
+    }
+
+    ImGui::Spacing();
     if (ImGui::Button("Quit", {panel_width, 42.0f})) {
       choice = ModelChoice::kQuit;
     }
@@ -107,7 +118,7 @@ int main(int, char*[]) {
   }
 
   SDL_Window* window = SDL_CreateWindow(
-      "Tiny2D Engine V10", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+      "Tiny2D Engine V11", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
       kWindowWidth, kWindowHeight, SDL_WINDOW_SHOWN);
   if (window == nullptr) {
     ShowError("The application window could not be created.");
@@ -170,6 +181,8 @@ int main(int, char*[]) {
       result = tiny2d::sandbox::RunInclineSpringSimulation(renderer);
     } else if (choice == ModelChoice::kRotationPendulum) {
       result = tiny2d::sandbox::RunRotationPendulumSimulation(renderer);
+    } else if (choice == ModelChoice::kRollingDisk) {
+      result = tiny2d::sandbox::RunRollingDiskSimulation(renderer);
     } else {
       break;
     }
