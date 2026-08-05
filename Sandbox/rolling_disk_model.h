@@ -24,8 +24,10 @@ enum class RollingDiskStatus {
 
 // SI units are used throughout. The ramp rises counterclockwise from global
 // +X; electric-field angles are also counterclockwise from +X. Distance and
-// linear velocity are positive downhill. Positive angular velocity is the
-// direction that satisfies pure rolling: velocity = radius * angular velocity.
+// linear velocity are positive downhill. Global +Z points out of the screen,
+// so positive magnetic_field_z_t points out of the screen. Positive angular
+// velocity is the direction that satisfies pure rolling:
+// velocity = radius * angular velocity.
 struct RollingDiskConfig {
   RollingDiskKind kind{RollingDiskKind::kSolidDisk};
   float ramp_length_m{10.0f};
@@ -42,6 +44,9 @@ struct RollingDiskConfig {
   float charge_c{};
   float electric_field_strength_n_c{};
   float electric_field_angle_degrees{};
+  bool magnetic_field_enabled{};
+  // Signed perpendicular magnetic field in teslas; valid range [-100, 100].
+  float magnetic_field_z_t{1.0f};
 };
 
 struct RollingDiskState {
@@ -58,6 +63,8 @@ struct RollingDiskState {
 struct RollingDiskDerived {
   float moment_of_inertia_kg_m2{};
   float tangential_external_force_n{};
+  // Signed force along the ramp's outward normal, q * v_down_ramp * B_z.
+  float magnetic_force_outward_n{};
   float normal_force_n{};
   float friction_force_n{};
   float acceleration_down_ramp_m_s2{};
@@ -72,7 +79,8 @@ struct RollingDiskDerived {
 
 // Returns nullptr when valid. Valid ranges include mass, radius, and ramp
 // length > 0; 0 <= kinetic friction <= static friction <= 5; 0 <= ramp angle
-// < 90 degrees; gravity > 0; and initial distance in [0, ramp length].
+// < 90 degrees; gravity > 0; magnetic field in [-100, 100] teslas; and initial
+// distance in [0, ramp length].
 const char* GetRollingDiskConfigError(const RollingDiskConfig& config);
 
 const char* GetRollingDiskStateError(const RollingDiskConfig& config,
@@ -91,7 +99,9 @@ const RollingDiskState* FindRollingDiskState(
 
 // Advances an active, surface-bound disk by a positive finite time step.
 // Returns false for invalid input, an airborne disk, or an already-finished
-// disk. Reaching either ramp endpoint is a successful step and updates status.
+// disk. A disk that loses contact during this step is committed with kAirborne
+// status before false is returned. Other failures leave state unchanged.
+// Reaching either ramp endpoint is a successful step and updates status.
 bool StepRollingDisk(const RollingDiskConfig& config, float delta_time,
                      RollingDiskState* state);
 

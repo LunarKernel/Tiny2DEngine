@@ -14,14 +14,18 @@ constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDegreesToRadians = kPi / 180.0f;
 constexpr float kMinimumMassOrRadius = 0.000001f;
 constexpr float kMaximumFrictionCoefficient = 5.0f;
+constexpr float kMaximumMagneticFieldTesla = 100.0f;
 constexpr float kSlipTolerance = 0.00001f;
 constexpr float kPositionTolerance = 0.00001f;
 constexpr double kRelativeTolerance =
     64.0 * std::numeric_limits<double>::epsilon();
+constexpr double kAirborneEventTimeTolerance =
+    8.0 * std::numeric_limits<float>::epsilon();
 
 struct Forces {
   double moment_of_inertia;
   double tangential_external;
+  double magnetic_outward;
   double normal;
   double normal_scale;
 };
@@ -76,7 +80,18 @@ double InertiaFactor(RollingDiskKind kind) {
   return kind == RollingDiskKind::kSolidDisk ? 0.5 : 1.0;
 }
 
-Forces CalculateForces(const RollingDiskConfig& config) {
+double MagneticForceOutward(const RollingDiskConfig& config,
+                            double velocity_down_ramp) {
+  if (!config.magnetic_field_enabled || config.charge_c == 0.0f ||
+      config.magnetic_field_z_t == 0.0f) {
+    return 0.0;
+  }
+  return static_cast<double>(config.charge_c) * velocity_down_ramp *
+         config.magnetic_field_z_t;
+}
+
+Forces CalculateForces(const RollingDiskConfig& config,
+                       double velocity_down_ramp) {
   const double angle =
       static_cast<double>(config.ramp_angle_degrees) * kDegreesToRadians;
   const double moment_of_inertia = InertiaFactor(config.kind) * config.mass_kg *
@@ -99,8 +114,12 @@ Forces CalculateForces(const RollingDiskConfig& config) {
     electric_normal = electric_force * std::sin(relative_angle);
     normal -= electric_normal;
   }
-  return {moment_of_inertia, tangential_external, normal,
-          std::abs(gravity_normal) + std::abs(electric_normal)};
+  const double magnetic_outward =
+      MagneticForceOutward(config, velocity_down_ramp);
+  normal -= magnetic_outward;
+  return {moment_of_inertia, tangential_external, magnetic_outward, normal,
+          std::abs(gravity_normal) + std::abs(electric_normal) +
+              std::abs(magnetic_outward)};
 }
 
 double EffectiveInverseMass(const RollingDiskConfig& config,
@@ -147,15 +166,36 @@ bool HasSurfaceContact(const Forces& forces) {
 
 void ConsiderEndpointRoot(double root, double maximum_time,
                           RollingDiskStatus status,
+                          bool allow_float_tie_after_maximum,
                           std::optional<EndpointHit>* earliest) {
   const double time_tolerance =
       kRelativeTolerance * std::max(maximum_time, 1.0);
+  const double maximum_time_tolerance =
+      allow_float_tie_after_maximum
+          ? kAirborneEventTimeTolerance * std::max(maximum_time, 1.0)
+          : time_tolerance;
   if (!std::isfinite(root) || root <= time_tolerance ||
-      root > maximum_time + time_tolerance) {
+      root > maximum_time + maximum_time_tolerance) {
     return;
   }
   root = std::min(root, maximum_time);
-  if (!earliest->has_value() || root < earliest->value().time) {
+  if (!earliest->has_value()) {
+    *earliest = EndpointHit{root, status};
+    return;
+  }
+  const double difference = root - earliest->value().time;
+  const bool airborne_priority =
+      status == RollingDiskStatus::kAirborne &&
+      earliest->value().status != RollingDiskStatus::kAirborne;
+  const bool compares_airborne =
+      status == RollingDiskStatus::kAirborne ||
+      earliest->value().status == RollingDiskStatus::kAirborne;
+  const double comparison_tolerance =
+      compares_airborne
+          ? kAirborneEventTimeTolerance * std::max(maximum_time, 1.0)
+          : time_tolerance;
+  if (difference < -comparison_tolerance ||
+      (std::abs(difference) <= comparison_tolerance && airborne_priority)) {
     *earliest = EndpointHit{root, status};
   }
 }
@@ -163,12 +203,14 @@ void ConsiderEndpointRoot(double root, double maximum_time,
 void ConsiderEndpoint(double position, double velocity, double acceleration,
                       double boundary, double maximum_time,
                       RollingDiskStatus status,
+                      bool allow_float_tie_after_maximum,
                       std::optional<EndpointHit>* earliest) {
   const double linear = velocity;
   const double constant = position - boundary;
   if (acceleration == 0.0) {
     if (linear != 0.0) {
-      ConsiderEndpointRoot(-constant / linear, maximum_time, status, earliest);
+      ConsiderEndpointRoot(-constant / linear, maximum_time, status,
+                           allow_float_tie_after_maximum, earliest);
     }
     return;
   }
@@ -185,24 +227,42 @@ void ConsiderEndpoint(double position, double velocity, double acceleration,
   const double q = -0.5 * (linear + std::copysign(square_root, linear));
   if (q == 0.0) {
     ConsiderEndpointRoot(-linear / (2.0 * quadratic), maximum_time, status,
-                         earliest);
+                         allow_float_tie_after_maximum, earliest);
     return;
   }
-  ConsiderEndpointRoot(q / quadratic, maximum_time, status, earliest);
-  ConsiderEndpointRoot(constant / q, maximum_time, status, earliest);
+  ConsiderEndpointRoot(q / quadratic, maximum_time, status,
+                       allow_float_tie_after_maximum, earliest);
+  ConsiderEndpointRoot(constant / q, maximum_time, status,
+                       allow_float_tie_after_maximum, earliest);
 }
 
-std::optional<EndpointHit> FindFirstEndpointHit(const RollingDiskConfig& config,
-                                                const RollingDiskState& state,
-                                                double acceleration,
-                                                double maximum_time) {
+std::optional<EndpointHit> FindFirstSegmentEvent(
+    const RollingDiskConfig& config, const RollingDiskState& state,
+    const Forces& forces, double acceleration, double maximum_time,
+    bool ends_at_slip_transition) {
   std::optional<EndpointHit> earliest;
+  const bool magnetic_force_enabled = config.magnetic_field_enabled &&
+                                      config.charge_c != 0.0f &&
+                                      config.magnetic_field_z_t != 0.0f;
+  const bool allow_float_tie_after_maximum =
+      magnetic_force_enabled && ends_at_slip_transition;
+  if (magnetic_force_enabled) {
+    const double magnetic_force_rate = static_cast<double>(config.charge_c) *
+                                       config.magnetic_field_z_t * acceleration;
+    if (magnetic_force_rate > 0.0) {
+      ConsiderEndpointRoot(forces.normal / magnetic_force_rate, maximum_time,
+                           RollingDiskStatus::kAirborne,
+                           allow_float_tie_after_maximum, &earliest);
+    }
+  }
   ConsiderEndpoint(state.distance_down_ramp_m, state.velocity_down_ramp_m_s,
                    acceleration, 0.0, maximum_time,
-                   RollingDiskStatus::kReachedTop, &earliest);
+                   RollingDiskStatus::kReachedTop,
+                   allow_float_tie_after_maximum, &earliest);
   ConsiderEndpoint(state.distance_down_ramp_m, state.velocity_down_ramp_m_s,
                    acceleration, config.ramp_length_m, maximum_time,
-                   RollingDiskStatus::kReachedBottom, &earliest);
+                   RollingDiskStatus::kReachedBottom,
+                   allow_float_tie_after_maximum, &earliest);
   return earliest;
 }
 
@@ -226,6 +286,7 @@ bool IsDerivedFinite(const RollingDiskDerived& derived) {
   const std::array values = {
       derived.moment_of_inertia_kg_m2,
       derived.tangential_external_force_n,
+      derived.magnetic_force_outward_n,
       derived.normal_force_n,
       derived.friction_force_n,
       derived.acceleration_down_ramp_m_s2,
@@ -265,7 +326,7 @@ double CurrentAcceleration(const RollingDiskConfig& config,
 
 RollingDiskDerived CalculateDerivedUnchecked(const RollingDiskConfig& config,
                                              const RollingDiskState& state) {
-  const Forces forces = CalculateForces(config);
+  const Forces forces = CalculateForces(config, state.velocity_down_ramp_m_s);
   const double slip = SlipVelocity(config, state);
   const double friction = CurrentFriction(config, forces, state);
   const double acceleration =
@@ -288,6 +349,7 @@ RollingDiskDerived CalculateDerivedUnchecked(const RollingDiskConfig& config,
   return {
       static_cast<float>(forces.moment_of_inertia),
       static_cast<float>(forces.tangential_external),
+      static_cast<float>(forces.magnetic_outward),
       static_cast<float>(forces.normal),
       static_cast<float>(friction),
       static_cast<float>(acceleration),
@@ -304,6 +366,7 @@ RollingDiskDerived CalculateDerivedUnchecked(const RollingDiskConfig& config,
 SegmentResult IntegrateSegment(const RollingDiskConfig& config,
                                const Forces& forces, double friction,
                                double delta_time, bool sliding,
+                               bool ends_at_slip_transition,
                                RollingDiskState* state) {
   if (delta_time <= 0.0) {
     return {true, 0.0};
@@ -313,9 +376,10 @@ SegmentResult IntegrateSegment(const RollingDiskConfig& config,
       (forces.tangential_external + friction) / config.mass_kg;
   const double angular_acceleration =
       -friction * config.radius_m / forces.moment_of_inertia;
-  const std::optional<EndpointHit> endpoint =
-      FindFirstEndpointHit(config, *state, acceleration, delta_time);
-  const double elapsed = endpoint.has_value() ? endpoint->time : delta_time;
+  const std::optional<EndpointHit> event =
+      FindFirstSegmentEvent(config, *state, forces, acceleration, delta_time,
+                            ends_at_slip_transition);
+  const double elapsed = event.has_value() ? event->time : delta_time;
   const double slip = SlipVelocity(config, *state);
   const double slip_acceleration =
       acceleration -
@@ -356,12 +420,16 @@ SegmentResult IntegrateSegment(const RollingDiskConfig& config,
   state->dissipated_energy_j = static_cast<float>(dissipated);
   state->contact_mode =
       sliding ? RollingContactMode::kSliding : RollingContactMode::kRolling;
-  if (endpoint.has_value()) {
-    state->status = endpoint->status;
-    state->distance_down_ramp_m =
-        endpoint->status == RollingDiskStatus::kReachedTop
-            ? 0.0f
-            : config.ramp_length_m;
+  if (event.has_value()) {
+    state->status = event->status;
+    if (event->status == RollingDiskStatus::kReachedTop) {
+      state->distance_down_ramp_m = 0.0f;
+    } else if (event->status == RollingDiskStatus::kReachedBottom) {
+      state->distance_down_ramp_m = config.ramp_length_m;
+    }
+  } else if (!HasSurfaceContact(
+                 CalculateForces(config, state->velocity_down_ramp_m_s))) {
+    state->status = RollingDiskStatus::kAirborne;
   }
   return {true, elapsed};
 }
@@ -383,6 +451,7 @@ const char* GetRollingDiskConfigError(const RollingDiskConfig& config) {
       config.charge_c,
       config.electric_field_strength_n_c,
       config.electric_field_angle_degrees,
+      config.magnetic_field_z_t,
   };
   if (!std::all_of(values.begin(), values.end(), IsFinite)) {
     return "All rolling-disk inputs must be finite.";
@@ -416,8 +485,13 @@ const char* GetRollingDiskConfigError(const RollingDiskConfig& config) {
     return "Gravity must be positive; field strength and angle are outside "
            "their valid ranges.";
   }
+  if (config.magnetic_field_z_t < -kMaximumMagneticFieldTesla ||
+      config.magnetic_field_z_t > kMaximumMagneticFieldTesla) {
+    return "Magnetic field B_z must be in [-100, 100] teslas.";
+  }
 
-  const Forces forces = CalculateForces(config);
+  const Forces forces =
+      CalculateForces(config, config.initial_velocity_down_ramp_m_s);
   const double initial_translational_energy =
       0.5 * config.mass_kg * config.initial_velocity_down_ramp_m_s *
       config.initial_velocity_down_ramp_m_s;
@@ -443,6 +517,7 @@ const char* GetRollingDiskConfigError(const RollingDiskConfig& config) {
           (config.ramp_length_m - config.initial_distance_down_ramp_m);
   if (!FitsFloat(forces.moment_of_inertia) || forces.moment_of_inertia <= 0.0 ||
       !FitsFloat(forces.tangential_external) || !FitsFloat(forces.normal) ||
+      !FitsFloat(forces.magnetic_outward) || !FitsFloat(forces.normal_scale) ||
       !FitsFloat(initial_translational_energy) ||
       !FitsFloat(initial_rotational_energy) || !FitsFloat(maximum_potential) ||
       !FitsFloat(maximum_friction) || !FitsFloat(maximum_linear_acceleration) ||
@@ -499,7 +574,7 @@ RollingDiskState MakeInitialRollingDiskState(const RollingDiskConfig& config) {
   state.velocity_down_ramp_m_s = config.initial_velocity_down_ramp_m_s;
   state.angular_velocity_rad_s = config.initial_angular_velocity_rad_s;
 
-  const Forces forces = CalculateForces(config);
+  const Forces forces = CalculateForces(config, state.velocity_down_ramp_m_s);
   const double slip = SlipVelocity(config, state);
   if (std::abs(slip) <= kSlipTolerance && CanRoll(config, forces)) {
     state.angular_velocity_rad_s =
@@ -567,11 +642,16 @@ bool StepRollingDisk(const RollingDiskConfig& config, float delta_time,
     *state = next;
     return true;
   };
-  const Forces forces = CalculateForces(config);
+  const auto commit_airborne = [&] {
+    if (GetRollingDiskStateError(config, next) == nullptr) {
+      *state = next;
+    }
+    return false;
+  };
+  const Forces forces = CalculateForces(config, next.velocity_down_ramp_m_s);
   if (!HasSurfaceContact(forces)) {
     next.status = RollingDiskStatus::kAirborne;
-    *state = next;
-    return false;
+    return commit_airborne();
   }
   next.status = GetInitialEndpointStatus(
       config, next, CurrentAcceleration(config, forces, next));
@@ -588,9 +668,12 @@ bool StepRollingDisk(const RollingDiskConfig& config, float delta_time,
   if (std::abs(slip) <= kSlipTolerance && can_roll) {
     next.angular_velocity_rad_s = next.velocity_down_ramp_m_s / config.radius_m;
     const SegmentResult result = IntegrateSegment(
-        config, forces, static_friction, remaining_time, false, &next);
+        config, forces, static_friction, remaining_time, false, false, &next);
     if (!result.valid) {
       return false;
+    }
+    if (next.status == RollingDiskStatus::kAirborne) {
+      return commit_airborne();
     }
     if (next.status != RollingDiskStatus::kActive) {
       return commit();
@@ -611,11 +694,14 @@ bool StepRollingDisk(const RollingDiskConfig& config, float delta_time,
       const double crossing_time =
           std::clamp(-slip / slip_acceleration, 0.0, remaining_time);
       const SegmentResult result = IntegrateSegment(
-          config, forces, kinetic_friction, crossing_time, true, &next);
+          config, forces, kinetic_friction, crossing_time, true, true, &next);
       if (!result.valid) {
         return false;
       }
       remaining_time -= result.elapsed;
+      if (next.status == RollingDiskStatus::kAirborne) {
+        return commit_airborne();
+      }
       if (next.status != RollingDiskStatus::kActive) {
         return commit();
       }
@@ -625,24 +711,46 @@ bool StepRollingDisk(const RollingDiskConfig& config, float delta_time,
     }
 
     if (remaining_time > 0.0) {
-      if ((crosses_zero || std::abs(slip) <= kSlipTolerance) && can_roll) {
+      Forces remaining_forces = forces;
+      double remaining_free_acceleration = free_acceleration;
+      bool remaining_can_roll = can_roll;
+      if (crosses_zero) {
+        remaining_forces = CalculateForces(config, next.velocity_down_ramp_m_s);
+        if (!HasSurfaceContact(remaining_forces)) {
+          next.status = RollingDiskStatus::kAirborne;
+          return commit_airborne();
+        }
+        remaining_free_acceleration =
+            remaining_forces.tangential_external / config.mass_kg;
+        remaining_can_roll = CanRoll(config, remaining_forces);
+      }
+      if ((crosses_zero || std::abs(slip) <= kSlipTolerance) &&
+          remaining_can_roll) {
+        const double remaining_static_friction =
+            RequiredRollingFriction(config, remaining_forces);
         const SegmentResult result = IntegrateSegment(
-            config, forces, static_friction, remaining_time, false, &next);
+            config, remaining_forces, remaining_static_friction, remaining_time,
+            false, false, &next);
         if (!result.valid) {
           return false;
         }
       } else {
-        const double remaining_direction =
-            std::abs(slip) > kSlipTolerance ? slip : free_acceleration;
+        const double remaining_direction = std::abs(slip) > kSlipTolerance
+                                               ? slip
+                                               : remaining_free_acceleration;
         const double remaining_friction =
-            SlidingFriction(config, forces, remaining_direction);
-        const SegmentResult result = IntegrateSegment(
-            config, forces, remaining_friction, remaining_time, true, &next);
+            SlidingFriction(config, remaining_forces, remaining_direction);
+        const SegmentResult result =
+            IntegrateSegment(config, remaining_forces, remaining_friction,
+                             remaining_time, true, false, &next);
         if (!result.valid) {
           return false;
         }
       }
     }
+  }
+  if (next.status == RollingDiskStatus::kAirborne) {
+    return commit_airborne();
   }
   return commit();
 }

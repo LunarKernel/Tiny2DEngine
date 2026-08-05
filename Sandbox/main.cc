@@ -85,8 +85,8 @@ ModelChoice ChooseModel(SDL_Renderer* renderer) {
     ImGui::TextUnformatted("V11 RollLab: Sliding / Rolling Transition");
     ImGui::TextWrapped(
         "A disk or hoop on an incline with static and kinetic friction. "
-        "Observe slipping, pure rolling, energy transfer, and electric-field "
-        "effects.");
+        "Observe slipping, pure rolling, energy transfer, and electric and "
+        "magnetic-field effects.");
     if (ImGui::Button("Open V11 RollLab", {panel_width, 74.0f})) {
       choice = ModelChoice::kRollingDisk;
     }

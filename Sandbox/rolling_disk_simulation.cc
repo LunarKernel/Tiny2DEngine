@@ -148,17 +148,23 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::RollingDiskConfig* config) {
   if (ImGui::RadioButton("10", config->gravity_m_s2 == 10.0f)) {
     config->gravity_m_s2 = 10.0f;
   }
+  SliderInputFloat("Charge q (C)", &config->charge_c, -1000.0f, 1000.0f,
+                   "%.6g");
   ImGui::Checkbox("Enable uniform electric field",
                   &config->electric_field_enabled);
   ImGui::BeginDisabled(!config->electric_field_enabled);
-  SliderInputFloat("Charge q (C)", &config->charge_c, -1000.0f, 1000.0f,
-                   "%.6g");
   SliderInputFloat("Electric field E (N/C)",
                    &config->electric_field_strength_n_c, 0.0f, 1000000.0f,
                    "%.6g", ImGuiSliderFlags_Logarithmic);
   SliderInputFloat("E angle from +X, CCW (degrees)",
                    &config->electric_field_angle_degrees, -180.0f, 180.0f,
                    "%.2f");
+  ImGui::EndDisabled();
+  ImGui::Checkbox("Enable uniform perpendicular magnetic field",
+                  &config->magnetic_field_enabled);
+  ImGui::BeginDisabled(!config->magnetic_field_enabled);
+  SliderInputFloat("Signed Bz (+Z out / -Z in) (T)",
+                   &config->magnetic_field_z_t, -100.0f, 100.0f, "%+.4g");
   ImGui::EndDisabled();
 
   const char* error = tiny2d::sandbox::GetRollingDiskConfigError(*config);
@@ -294,6 +300,13 @@ void DrawScene(const tiny2d::sandbox::RollingDiskConfig& config,
               {downhill.x * friction_sign, downhill.y * friction_sign}, 62.0f,
               IM_COL32(100, 205, 245, 255));
   }
+  if (std::abs(derived.magnetic_force_outward_n) > 0.00001f) {
+    const float magnetic_sign =
+        std::copysign(1.0f, derived.magnetic_force_outward_n);
+    DrawArrow(draw_list, center,
+              {outward.x * magnetic_sign, outward.y * magnetic_sign}, 62.0f,
+              IM_COL32(205, 125, 255, 255));
+  }
 
   draw_list->PathArcTo(bottom, 44.0f, -angle, 0.0f, 18);
   draw_list->PathStroke(IM_COL32(235, 235, 235, 255), 0, 2.0f);
@@ -316,6 +329,32 @@ void DrawScene(const tiny2d::sandbox::RollingDiskConfig& config,
                   config.electric_field_angle_degrees);
     draw_list->AddText({display_size.x - 300.0f, display_size.y - 105.0f},
                        IM_COL32(120, 235, 165, 255), field_label);
+  }
+
+  if (config.magnetic_field_enabled) {
+    constexpr float kFieldSymbolRadius = 16.0f;
+    const ImVec2 field_center{display_size.x - 135.0f, display_size.y - 265.0f};
+    const ImU32 field_color = IM_COL32(205, 125, 255, 255);
+    draw_list->AddCircle(field_center, kFieldSymbolRadius, field_color, 32,
+                         2.5f);
+    if (config.magnetic_field_z_t > 0.0f) {
+      draw_list->AddCircleFilled(field_center, 4.0f, field_color, 16);
+    } else if (config.magnetic_field_z_t < 0.0f) {
+      constexpr float kCrossOffset = 9.0f;
+      draw_list->AddLine(
+          {field_center.x - kCrossOffset, field_center.y - kCrossOffset},
+          {field_center.x + kCrossOffset, field_center.y + kCrossOffset},
+          field_color, 2.5f);
+      draw_list->AddLine(
+          {field_center.x - kCrossOffset, field_center.y + kCrossOffset},
+          {field_center.x + kCrossOffset, field_center.y - kCrossOffset},
+          field_color, 2.5f);
+    }
+    char magnetic_field_label[88];
+    std::snprintf(magnetic_field_label, sizeof(magnetic_field_label),
+                  "Bz = %+.4g T (+Z out / -Z in)", config.magnetic_field_z_t);
+    draw_list->AddText({display_size.x - 300.0f, display_size.y - 225.0f},
+                       field_color, magnetic_field_label);
   }
 
   DrawArrow(draw_list, {display_size.x - 340.0f, display_size.y - 165.0f},
@@ -404,6 +443,10 @@ bool DrawMonitor(const tiny2d::sandbox::RollingDiskConfig& config,
   ImGui::Text("I: %.7f kg*m^2", derived.moment_of_inertia_kg_m2);
   ImGui::Text("External tangent force: %+.6f N",
               derived.tangential_external_force_n);
+  ImGui::Text("Bz: %+.6f T%s", config.magnetic_field_z_t,
+              config.magnetic_field_enabled ? "" : " (disabled)");
+  ImGui::Text("Magnetic force outward: %+.6f N",
+              derived.magnetic_force_outward_n);
   ImGui::Text("Normal force: %.6f N", derived.normal_force_n);
   ImGui::Text("Friction force: %+.6f N", derived.friction_force_n);
 
@@ -496,10 +539,13 @@ SimulationResult RunRollingDiskSimulation(SDL_Renderer* renderer) {
         history.clear();
         history.push_back(state);
         simulation_started = true;
-        paused = false;
+        paused = state.status != RollingDiskStatus::kActive;
         follow_live = true;
         inspect_time = 0.0f;
-        runtime_error = nullptr;
+        runtime_error = state.status == RollingDiskStatus::kAirborne
+                            ? "The initial compound-field configuration has "
+                              "no ramp contact."
+                            : nullptr;
         previous_time = current_time;
       }
     } else if (simulation_started) {
@@ -512,7 +558,18 @@ SimulationResult RunRollingDiskSimulation(SDL_Renderer* renderer) {
         accumulated_time += frame_time;
         while (accumulated_time >= kPhysicsStep) {
           if (!StepRollingDisk(config, kPhysicsStep, &state)) {
-            runtime_error = GetRollingDiskStateError(config, state);
+            if (state.status == RollingDiskStatus::kAirborne) {
+              if (!history.empty() &&
+                  state.time_seconds <= history.back().time_seconds) {
+                history.back() = state;
+              } else {
+                history.push_back(state);
+              }
+              runtime_error =
+                  "The compound fields caused the body to lose ramp contact.";
+            } else {
+              runtime_error = GetRollingDiskStateError(config, state);
+            }
             if (runtime_error == nullptr) {
               runtime_error =
                   "The fixed-step rolling model rejected this state.";

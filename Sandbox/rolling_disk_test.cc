@@ -19,6 +19,7 @@ using tiny2d::sandbox::GetRollingDiskStateError;
 using tiny2d::sandbox::MakeInitialRollingDiskState;
 using tiny2d::sandbox::RollingContactMode;
 using tiny2d::sandbox::RollingDiskConfig;
+using tiny2d::sandbox::RollingDiskDerived;
 using tiny2d::sandbox::RollingDiskKind;
 using tiny2d::sandbox::RollingDiskState;
 using tiny2d::sandbox::RollingDiskStatus;
@@ -53,6 +54,21 @@ bool SameState(const RollingDiskState& a, const RollingDiskState& b) {
          a.time_seconds == b.time_seconds &&
          a.dissipated_energy_j == b.dissipated_energy_j &&
          a.contact_mode == b.contact_mode && a.status == b.status;
+}
+
+bool SameOldDerived(const RollingDiskDerived& a, const RollingDiskDerived& b) {
+  return a.moment_of_inertia_kg_m2 == b.moment_of_inertia_kg_m2 &&
+         a.tangential_external_force_n == b.tangential_external_force_n &&
+         a.normal_force_n == b.normal_force_n &&
+         a.friction_force_n == b.friction_force_n &&
+         a.acceleration_down_ramp_m_s2 == b.acceleration_down_ramp_m_s2 &&
+         a.angular_acceleration_rad_s2 == b.angular_acceleration_rad_s2 &&
+         a.slip_velocity_m_s == b.slip_velocity_m_s &&
+         a.translational_kinetic_energy_j == b.translational_kinetic_energy_j &&
+         a.rotational_kinetic_energy_j == b.rotational_kinetic_energy_j &&
+         a.potential_energy_j == b.potential_energy_j &&
+         a.mechanical_energy_j == b.mechanical_energy_j &&
+         a.accounted_energy_j == b.accounted_energy_j;
 }
 
 void ExpectInvalidConfig(const RollingDiskConfig& config) {
@@ -189,6 +205,297 @@ void TestElectricFieldProjectionAndAirborneDetection() {
   CHECK(state.status == RollingDiskStatus::kActive);
 }
 
+void TestMagneticBaselineProjectionAndSigns() {
+  RollingDiskConfig baseline;
+  baseline.ramp_length_m = 1000.0f;
+  baseline.initial_distance_down_ramp_m = 1.0f;
+
+  RollingDiskConfig disabled = baseline;
+  disabled.charge_c = 2.0f;
+  disabled.magnetic_field_z_t = 100.0f;
+  RollingDiskConfig zero_charge = baseline;
+  zero_charge.magnetic_field_enabled = true;
+  zero_charge.magnetic_field_z_t = 100.0f;
+  RollingDiskConfig zero_field = baseline;
+  zero_field.magnetic_field_enabled = true;
+  zero_field.charge_c = 2.0f;
+  zero_field.magnetic_field_z_t = 0.0f;
+  const std::array no_effect_configs = {disabled, zero_charge, zero_field};
+
+  for (const RollingDiskConfig& config : no_effect_configs) {
+    RollingDiskState expected = MakeInitialRollingDiskState(baseline);
+    RollingDiskState actual = MakeInitialRollingDiskState(config);
+    CHECK(SameState(actual, expected));
+    RollingDiskDerived expected_derived =
+        CalculateRollingDiskDerived(baseline, expected);
+    RollingDiskDerived actual_derived =
+        CalculateRollingDiskDerived(config, actual);
+    CHECK(SameOldDerived(actual_derived, expected_derived));
+    CHECK(actual_derived.magnetic_force_outward_n == 0.0f);
+    for (int step = 0; step < 240; ++step) {
+      CHECK(StepRollingDisk(baseline, kStep, &expected));
+      CHECK(StepRollingDisk(config, kStep, &actual));
+      CHECK(SameState(actual, expected));
+      expected_derived = CalculateRollingDiskDerived(baseline, expected);
+      actual_derived = CalculateRollingDiskDerived(config, actual);
+      CHECK(SameOldDerived(actual_derived, expected_derived));
+      CHECK(actual_derived.magnetic_force_outward_n == 0.0f);
+    }
+  }
+
+  RollingDiskConfig config;
+  config.ramp_length_m = 100.0f;
+  config.ramp_angle_degrees = 30.0f;
+  config.mass_kg = 1.0f;
+  config.initial_distance_down_ramp_m = 1.0f;
+  config.initial_velocity_down_ramp_m_s = 2.0f;
+  config.static_friction_coefficient = 0.0f;
+  config.kinetic_friction_coefficient = 0.0f;
+  config.gravity_m_s2 = 10.0f;
+  config.charge_c = 1.0f;
+  config.magnetic_field_enabled = true;
+  config.magnetic_field_z_t = 1.0f;
+  RollingDiskState state = MakeInitialRollingDiskState(config);
+  RollingDiskDerived derived = CalculateRollingDiskDerived(config, state);
+  CHECK(Near(derived.magnetic_force_outward_n, 2.0f, 0.00001f));
+  CHECK(Near(derived.normal_force_n, 6.660254f, 0.00001f));
+
+  RollingDiskConfig no_field = config;
+  no_field.magnetic_field_enabled = false;
+  const RollingDiskDerived no_field_derived = CalculateRollingDiskDerived(
+      no_field, MakeInitialRollingDiskState(no_field));
+  CHECK(derived.tangential_external_force_n ==
+        no_field_derived.tangential_external_force_n);
+  CHECK(derived.acceleration_down_ramp_m_s2 ==
+        no_field_derived.acceleration_down_ramp_m_s2);
+  CHECK(derived.angular_acceleration_rad_s2 == 0.0f);
+  CHECK(no_field_derived.angular_acceleration_rad_s2 == 0.0f);
+
+  config.charge_c = -1.0f;
+  derived =
+      CalculateRollingDiskDerived(config, MakeInitialRollingDiskState(config));
+  CHECK(Near(derived.magnetic_force_outward_n, -2.0f, 0.00001f));
+  config.charge_c = 1.0f;
+  config.magnetic_field_z_t = -1.0f;
+  derived =
+      CalculateRollingDiskDerived(config, MakeInitialRollingDiskState(config));
+  CHECK(Near(derived.magnetic_force_outward_n, -2.0f, 0.00001f));
+  config.magnetic_field_z_t = 1.0f;
+  config.initial_velocity_down_ramp_m_s = -2.0f;
+  derived =
+      CalculateRollingDiskDerived(config, MakeInitialRollingDiskState(config));
+  CHECK(Near(derived.magnetic_force_outward_n, -2.0f, 0.00001f));
+  config.charge_c = -1.0f;
+  config.magnetic_field_z_t = -1.0f;
+  config.initial_velocity_down_ramp_m_s = 2.0f;
+  derived =
+      CalculateRollingDiskDerived(config, MakeInitialRollingDiskState(config));
+  CHECK(Near(derived.magnetic_force_outward_n, 2.0f, 0.00001f));
+  config.charge_c = -1.0f;
+  config.magnetic_field_z_t = 1.0f;
+  config.initial_velocity_down_ramp_m_s = -2.0f;
+  derived =
+      CalculateRollingDiskDerived(config, MakeInitialRollingDiskState(config));
+  CHECK(Near(derived.magnetic_force_outward_n, 2.0f, 0.00001f));
+  config.charge_c = 1.0f;
+  config.magnetic_field_z_t = -1.0f;
+  config.initial_velocity_down_ramp_m_s = -2.0f;
+  derived =
+      CalculateRollingDiskDerived(config, MakeInitialRollingDiskState(config));
+  CHECK(Near(derived.magnetic_force_outward_n, 2.0f, 0.00001f));
+}
+
+void TestMagneticFieldChangesContactFriction() {
+  RollingDiskConfig outward;
+  outward.ramp_length_m = 100.0f;
+  outward.ramp_angle_degrees = 30.0f;
+  outward.mass_kg = 1.0f;
+  outward.radius_m = 0.25f;
+  outward.static_friction_coefficient = 0.2f;
+  outward.kinetic_friction_coefficient = 0.1f;
+  outward.initial_distance_down_ramp_m = 1.0f;
+  outward.initial_velocity_down_ramp_m_s = 2.0f;
+  outward.initial_angular_velocity_rad_s = 8.0f;
+  outward.gravity_m_s2 = 10.0f;
+  outward.charge_c = 1.0f;
+  outward.magnetic_field_enabled = true;
+  outward.magnetic_field_z_t = 1.0f;
+
+  RollingDiskConfig inward = outward;
+  inward.magnetic_field_z_t = -1.0f;
+  const RollingDiskState outward_state = MakeInitialRollingDiskState(outward);
+  const RollingDiskState inward_state = MakeInitialRollingDiskState(inward);
+  const RollingDiskDerived outward_derived =
+      CalculateRollingDiskDerived(outward, outward_state);
+  const RollingDiskDerived inward_derived =
+      CalculateRollingDiskDerived(inward, inward_state);
+
+  CHECK(outward_state.contact_mode == RollingContactMode::kSliding);
+  CHECK(inward_state.contact_mode == RollingContactMode::kRolling);
+  CHECK(outward_derived.normal_force_n < inward_derived.normal_force_n);
+  CHECK(std::abs(outward_derived.friction_force_n) <
+        std::abs(inward_derived.friction_force_n));
+}
+
+void TestMagneticAirborneEvents() {
+  RollingDiskConfig config;
+  config.ramp_length_m = 100.0f;
+  config.ramp_angle_degrees = 30.0f;
+  config.mass_kg = 1.0f;
+  config.radius_m = 0.25f;
+  config.initial_distance_down_ramp_m = 1.0f;
+  config.initial_velocity_down_ramp_m_s = 2.0f;
+  config.initial_angular_velocity_rad_s = 8.0f;
+  config.gravity_m_s2 = 10.0f;
+  config.charge_c = 1.0f;
+  config.magnetic_field_enabled = true;
+  config.magnetic_field_z_t = 5.0f;
+
+  RollingDiskState state = MakeInitialRollingDiskState(config);
+  CHECK(state.status == RollingDiskStatus::kAirborne);
+  const RollingDiskState initial_airborne = state;
+  CHECK(!StepRollingDisk(config, kStep, &state));
+  CHECK(SameState(state, initial_airborne));
+
+  constexpr float kContactBoundaryField = 4.330127f;
+  config.magnetic_field_z_t = kContactBoundaryField * 0.9999f;
+  CHECK(MakeInitialRollingDiskState(config).status ==
+        RollingDiskStatus::kActive);
+  config.magnetic_field_z_t = kContactBoundaryField * 1.0001f;
+  CHECK(MakeInitialRollingDiskState(config).status ==
+        RollingDiskStatus::kAirborne);
+
+  config.initial_velocity_down_ramp_m_s = 0.0f;
+  config.initial_angular_velocity_rad_s = 0.0f;
+  config.static_friction_coefficient = 5.0f;
+  config.kinetic_friction_coefficient = 0.3f;
+  config.magnetic_field_z_t = 1.0f;
+  state = MakeInitialRollingDiskState(config);
+  CHECK(state.status == RollingDiskStatus::kActive);
+  bool became_airborne = false;
+  for (int step = 0; step < 5 * 240; ++step) {
+    if (!StepRollingDisk(config, kStep, &state)) {
+      CHECK(state.status == RollingDiskStatus::kAirborne);
+      CHECK(GetRollingDiskStateError(config, state) == nullptr);
+      became_airborne = true;
+      break;
+    }
+  }
+  CHECK(became_airborne);
+  CHECK(state.time_seconds > 0.0f && state.time_seconds < 5.0f);
+  CHECK(state.distance_down_ramp_m > 0.0f &&
+        state.distance_down_ramp_m < config.ramp_length_m);
+}
+
+void TestAirborneWinsEndpointTie() {
+  RollingDiskConfig config;
+  config.ramp_length_m = 0.0075f;
+  config.ramp_angle_degrees = 0.0f;
+  config.initial_distance_down_ramp_m = 0.0f;
+  config.initial_velocity_down_ramp_m_s = 0.0f;
+  config.initial_angular_velocity_rad_s = 0.0f;
+  config.gravity_m_s2 = 10.0f;
+  config.charge_c = 1.0f;
+  config.electric_field_enabled = true;
+  config.electric_field_strength_n_c = 1.0f;
+  config.electric_field_angle_degrees = 180.0f;
+  config.magnetic_field_enabled = true;
+  config.magnetic_field_z_t = 100.0f;
+
+  RollingDiskState state = MakeInitialRollingDiskState(config);
+  CHECK(state.status == RollingDiskStatus::kActive);
+  CHECK(!StepRollingDisk(config, 0.2f, &state));
+  CHECK(state.status == RollingDiskStatus::kAirborne);
+  CHECK(Near(state.time_seconds, 0.15f, 0.00001f));
+}
+
+void TestAirborneWinsSlipTransitionTie() {
+  RollingDiskConfig config;
+  config.ramp_length_m = 100.0f;
+  config.ramp_angle_degrees = 0.0f;
+  config.initial_distance_down_ramp_m = 1.0f;
+  config.initial_velocity_down_ramp_m_s = 0.0f;
+  config.initial_angular_velocity_rad_s = 2.7999997f;
+  config.kinetic_friction_coefficient = 0.15f;
+  config.gravity_m_s2 = 10.0f;
+  config.charge_c = 1.0f;
+  config.electric_field_enabled = true;
+  config.electric_field_strength_n_c = 1.0f;
+  config.electric_field_angle_degrees = 0.0f;
+  config.magnetic_field_enabled = true;
+  config.magnetic_field_z_t = 100.0f;
+
+  RollingDiskState state = MakeInitialRollingDiskState(config);
+  CHECK(state.status == RollingDiskStatus::kActive);
+  CHECK(state.contact_mode == RollingContactMode::kSliding);
+  CHECK(!StepRollingDisk(config, 0.25f, &state));
+  CHECK(state.status == RollingDiskStatus::kAirborne);
+  CHECK(Near(state.time_seconds, 0.2f, 0.00001f));
+}
+
+void TestMagneticEnergyAndStepConvergence() {
+  RollingDiskConfig conservative;
+  conservative.ramp_length_m = 1000.0f;
+  conservative.ramp_angle_degrees = 30.0f;
+  conservative.initial_distance_down_ramp_m = 1.0f;
+  conservative.initial_velocity_down_ramp_m_s = 1.0f;
+  conservative.static_friction_coefficient = 0.0f;
+  conservative.kinetic_friction_coefficient = 0.0f;
+  conservative.gravity_m_s2 = 10.0f;
+  conservative.charge_c = 1.0f;
+  conservative.magnetic_field_enabled = true;
+  conservative.magnetic_field_z_t = -1.0f;
+  RollingDiskState state = MakeInitialRollingDiskState(conservative);
+  const float initial_energy =
+      CalculateRollingDiskDerived(conservative, state).mechanical_energy_j;
+  float maximum_relative_drift = 0.0f;
+  for (int step = 0; step < 5 * 240; ++step) {
+    CHECK(StepRollingDisk(conservative, kStep, &state));
+    const float energy =
+        CalculateRollingDiskDerived(conservative, state).mechanical_energy_j;
+    maximum_relative_drift = std::max(
+        maximum_relative_drift, std::abs(energy - initial_energy) /
+                                    std::max(1.0f, std::abs(initial_energy)));
+  }
+  CHECK(maximum_relative_drift < 0.00001f);
+
+  RollingDiskConfig dissipative = conservative;
+  dissipative.static_friction_coefficient = 0.05f;
+  dissipative.kinetic_friction_coefficient = 0.05f;
+  dissipative.magnetic_field_z_t = -0.2f;
+  state = MakeInitialRollingDiskState(dissipative);
+  const float initial_accounted =
+      CalculateRollingDiskDerived(dissipative, state).accounted_energy_j;
+  maximum_relative_drift = 0.0f;
+  for (int step = 0; step < 5 * 240; ++step) {
+    CHECK(StepRollingDisk(dissipative, kStep, &state));
+    const float accounted =
+        CalculateRollingDiskDerived(dissipative, state).accounted_energy_j;
+    maximum_relative_drift =
+        std::max(maximum_relative_drift,
+                 std::abs(accounted - initial_accounted) /
+                     std::max(1.0f, std::abs(initial_accounted)));
+  }
+  CHECK(maximum_relative_drift < 0.001f);
+
+  RollingDiskState coarse = MakeInitialRollingDiskState(dissipative);
+  RollingDiskState fine = coarse;
+  for (int step = 0; step < 240; ++step) {
+    CHECK(StepRollingDisk(dissipative, 1.0f / 240.0f, &coarse));
+  }
+  for (int step = 0; step < 480; ++step) {
+    CHECK(StepRollingDisk(dissipative, 1.0f / 480.0f, &fine));
+  }
+  CHECK(coarse.status == RollingDiskStatus::kActive);
+  CHECK(fine.status == RollingDiskStatus::kActive);
+  CHECK(Near(coarse.distance_down_ramp_m, fine.distance_down_ramp_m, 0.005f));
+  CHECK(
+      Near(coarse.velocity_down_ramp_m_s, fine.velocity_down_ramp_m_s, 0.005f));
+  CHECK(
+      Near(coarse.angular_velocity_rad_s, fine.angular_velocity_rad_s, 0.005f));
+  CHECK(Near(coarse.dissipated_energy_j, fine.dissipated_energy_j, 0.005f));
+}
+
 void TestHistoryLookup() {
   std::vector<RollingDiskState> history(3);
   history[0].time_seconds = 0.0f;
@@ -297,7 +604,7 @@ void TestInvalidAndExtremeInputs() {
       std::numeric_limits<float>::infinity(),
       -std::numeric_limits<float>::infinity(),
   };
-  constexpr std::array<float RollingDiskConfig::*, 13> fields = {
+  constexpr std::array<float RollingDiskConfig::*, 14> fields = {
       &RollingDiskConfig::ramp_length_m,
       &RollingDiskConfig::ramp_angle_degrees,
       &RollingDiskConfig::mass_kg,
@@ -311,6 +618,7 @@ void TestInvalidAndExtremeInputs() {
       &RollingDiskConfig::charge_c,
       &RollingDiskConfig::electric_field_strength_n_c,
       &RollingDiskConfig::electric_field_angle_degrees,
+      &RollingDiskConfig::magnetic_field_z_t,
   };
   for (float invalid : invalid_values) {
     for (float RollingDiskConfig::* field : fields) {
@@ -363,6 +671,43 @@ void TestInvalidAndExtremeInputs() {
   ExpectInvalidConfig(config);
 
   config = RollingDiskConfig{};
+  config.magnetic_field_enabled = true;
+  config.magnetic_field_z_t = -100.0f;
+  CHECK(GetRollingDiskConfigError(config) == nullptr);
+  config.magnetic_field_z_t = 100.0f;
+  CHECK(GetRollingDiskConfigError(config) == nullptr);
+  config.magnetic_field_z_t = -100.01f;
+  ExpectInvalidConfig(config);
+  config.magnetic_field_z_t = 100.01f;
+  ExpectInvalidConfig(config);
+  config.magnetic_field_enabled = false;
+  ExpectInvalidConfig(config);
+
+  config = RollingDiskConfig{};
+  config.ramp_length_m = 100.0f;
+  config.initial_distance_down_ramp_m = 1.0f;
+  config.initial_velocity_down_ramp_m_s = 50.0f;
+  config.charge_c = std::numeric_limits<float>::max() / 4.0f;
+  config.magnetic_field_enabled = true;
+  config.magnetic_field_z_t = 100.0f;
+  ExpectInvalidConfig(config);
+
+  config = RollingDiskConfig{};
+  config.ramp_length_m = 100.0f;
+  config.initial_distance_down_ramp_m = 1.0f;
+  config.charge_c = 2.0f;
+  config.magnetic_field_enabled = true;
+  config.magnetic_field_z_t = 100.0f;
+  config.initial_velocity_down_ramp_m_s = 0.0f;
+  config.initial_angular_velocity_rad_s = 0.0f;
+  RollingDiskState overflow_state = MakeInitialRollingDiskState(config);
+  CHECK(overflow_state.status == RollingDiskStatus::kActive);
+  overflow_state.velocity_down_ramp_m_s = std::numeric_limits<float>::max();
+  const RollingDiskState unchanged_overflow_state = overflow_state;
+  CHECK(!StepRollingDisk(config, kStep, &overflow_state));
+  CHECK(SameState(overflow_state, unchanged_overflow_state));
+
+  config = RollingDiskConfig{};
   config.mass_kg = std::numeric_limits<float>::max();
   config.radius_m = std::numeric_limits<float>::max();
   ExpectInvalidConfig(config);
@@ -413,6 +758,8 @@ void TestLongRunIsFiniteAndDeterministic() {
   config.charge_c = -0.5f;
   config.electric_field_strength_n_c = 2.0f;
   config.electric_field_angle_degrees = -40.0f;
+  config.magnetic_field_enabled = true;
+  config.magnetic_field_z_t = 0.05f;
   RollingDiskState first = MakeInitialRollingDiskState(config);
   RollingDiskState second = first;
 
@@ -443,6 +790,16 @@ int main() {
       NamedTest{"conservative rolling energy", TestConservativeRollingEnergy},
       NamedTest{"electric projection and airborne detection",
                 TestElectricFieldProjectionAndAirborneDetection},
+      NamedTest{"magnetic baseline, projection, and signs",
+                TestMagneticBaselineProjectionAndSigns},
+      NamedTest{"magnetic field changes contact friction",
+                TestMagneticFieldChangesContactFriction},
+      NamedTest{"magnetic airborne events", TestMagneticAirborneEvents},
+      NamedTest{"airborne wins endpoint tie", TestAirborneWinsEndpointTie},
+      NamedTest{"airborne wins slip-transition tie",
+                TestAirborneWinsSlipTransitionTie},
+      NamedTest{"magnetic energy and step convergence",
+                TestMagneticEnergyAndStepConvergence},
       NamedTest{"history lookup", TestHistoryLookup},
       NamedTest{"ramp endpoint states", TestRampEndpointStates},
       NamedTest{"endpoint uses first trajectory hit",
