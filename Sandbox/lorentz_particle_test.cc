@@ -142,6 +142,115 @@ void TestCrossedFieldDriftAfterOnePeriod() {
   CHECK(Near(state.velocity_y_m_s, initial_state.velocity_y_m_s, 3e-9));
 }
 
+void TestPureGravityMatchesKinematicsAndEnergy() {
+  LorentzParticleConfig config;
+  config.mass_kg = 2.0;
+  config.charge_c = 0.0;
+  config.initial_x_m = 0.0;
+  config.initial_y_m = 1.0;
+  config.initial_speed_m_s = 4.0;
+  config.initial_velocity_angle_degrees = 30.0;
+  config.gravity_enabled = true;
+  config.gravitational_acceleration_m_s2 = 9.8;
+  LorentzParticleState state = MakeInitialLorentzParticleState(config);
+  const double initial_energy =
+      CalculateLorentzParticleDerived(config, state).total_energy_j;
+
+  constexpr double kDuration = 0.5;
+  AdvanceFor(config, kDuration, &state);
+  const double initial_velocity_x = 4.0 * std::cos(kPi / 6.0);
+  constexpr double kInitialVelocityY = 2.0;
+  CHECK(Near(state.x_m, initial_velocity_x * kDuration, 2e-10));
+  CHECK(Near(
+      state.y_m,
+      1.0 + kInitialVelocityY * kDuration - 0.5 * 9.8 * kDuration * kDuration,
+      2e-10));
+  CHECK(Near(state.velocity_x_m_s, initial_velocity_x, 2e-10));
+  CHECK(Near(state.velocity_y_m_s, kInitialVelocityY - 9.8 * kDuration, 2e-10));
+
+  const LorentzParticleDerived derived =
+      CalculateLorentzParticleDerived(config, state);
+  CHECK(Near(derived.acceleration_x_m_s2, 0.0));
+  CHECK(Near(derived.acceleration_y_m_s2, -9.8));
+  CHECK(Near(derived.gravitational_potential_energy_j,
+             config.mass_kg * 9.8 * (state.y_m - config.initial_y_m), 2e-10));
+  CHECK(Near(derived.total_energy_j, initial_energy, 2e-9));
+}
+
+void TestElectricFieldBalancesGravity() {
+  LorentzParticleConfig config;
+  config.mass_kg = 2.0;
+  config.charge_c = 4.0;
+  config.initial_x_m = 0.0;
+  config.initial_y_m = 0.0;
+  config.initial_speed_m_s = 0.0;
+  config.electric_field_strength_n_c = 4.9;
+  config.electric_field_angle_degrees = 90.0;
+  config.magnetic_field_enabled = false;
+  config.gravity_enabled = true;
+  config.gravitational_acceleration_m_s2 = 9.8;
+  LorentzParticleState state = MakeInitialLorentzParticleState(config);
+
+  AdvanceFor(config, 1.0, &state);
+  const LorentzParticleDerived derived =
+      CalculateLorentzParticleDerived(config, state);
+  CHECK(Near(state.x_m, 0.0));
+  CHECK(Near(state.y_m, 0.0));
+  CHECK(Near(state.velocity_x_m_s, 0.0));
+  CHECK(Near(state.velocity_y_m_s, 0.0));
+  CHECK(Near(derived.acceleration_x_m_s2, 0.0));
+  CHECK(Near(derived.acceleration_y_m_s2, 0.0));
+  CHECK(Near(derived.total_energy_j, 0.0));
+}
+
+void TestGeneralizedConstantForceDrift() {
+  LorentzParticleConfig config;
+  config.electric_field_strength_n_c = 10.1;
+  config.gravity_enabled = true;
+  config.gravitational_acceleration_m_s2 = 9.8;
+  LorentzParticleState state = MakeInitialLorentzParticleState(config);
+  const LorentzParticleState initial_state = state;
+  const LorentzParticleDerived initial =
+      CalculateLorentzParticleDerived(config, state);
+  CHECK(initial.has_cyclotron_data);
+  CHECK(Near(initial.drift_velocity_x_m_s, 0.3));
+  CHECK(Near(initial.drift_velocity_y_m_s, 0.0));
+
+  AdvanceFor(config, initial.cyclotron_period_s, &state);
+  const LorentzParticleDerived final =
+      CalculateLorentzParticleDerived(config, state);
+  CHECK(Near(state.x_m,
+             initial_state.x_m +
+                 initial.drift_velocity_x_m_s * initial.cyclotron_period_s,
+             3e-9));
+  CHECK(Near(state.y_m, initial_state.y_m, 3e-9));
+  CHECK(Near(state.velocity_x_m_s, initial_state.velocity_x_m_s, 3e-9));
+  CHECK(Near(state.velocity_y_m_s, initial_state.velocity_y_m_s, 3e-9));
+  CHECK(Near(final.total_energy_j, initial.total_energy_j, 3e-9));
+}
+
+void TestDisabledAndZeroGravityPreserveV12() {
+  LorentzParticleConfig disabled;
+  disabled.gravity_enabled = false;
+  disabled.gravitational_acceleration_m_s2 = 100.0;
+  LorentzParticleConfig zero = disabled;
+  zero.gravity_enabled = true;
+  zero.gravitational_acceleration_m_s2 = 0.0;
+  LorentzParticleState disabled_state =
+      MakeInitialLorentzParticleState(disabled);
+  LorentzParticleState zero_state = MakeInitialLorentzParticleState(zero);
+
+  for (int step = 0; step < 100; ++step) {
+    CHECK(StepLorentzParticle(disabled, kLorentzPhysicsStep, &disabled_state));
+    CHECK(StepLorentzParticle(zero, kLorentzPhysicsStep, &zero_state));
+    CHECK(SameState(disabled_state, zero_state));
+  }
+  const LorentzParticleDerived disabled_derived =
+      CalculateLorentzParticleDerived(disabled, disabled_state);
+  CHECK(disabled_derived.gravitational_potential_energy_j == 0.0);
+  CHECK(Near(disabled_derived.drift_velocity_x_m_s, 0.3));
+}
+
 void TestChargeAndMagneticSignsIndependently() {
   LorentzParticleConfig positive;
   positive.initial_x_m = 0.0;
@@ -244,7 +353,7 @@ void TestOutOfBoundsTerminalState() {
 void TestValidationAndFailureAtomicity() {
   LorentzParticleConfig config;
   CHECK(GetLorentzParticleConfigError(config) == nullptr);
-  constexpr std::array<double LorentzParticleConfig::*, 9> fields = {
+  constexpr std::array<double LorentzParticleConfig::*, 10> fields = {
       &LorentzParticleConfig::mass_kg,
       &LorentzParticleConfig::charge_c,
       &LorentzParticleConfig::initial_x_m,
@@ -254,6 +363,7 @@ void TestValidationAndFailureAtomicity() {
       &LorentzParticleConfig::electric_field_strength_n_c,
       &LorentzParticleConfig::electric_field_angle_degrees,
       &LorentzParticleConfig::magnetic_field_z_t,
+      &LorentzParticleConfig::gravitational_acceleration_m_s2,
   };
   for (double LorentzParticleConfig::* field : fields) {
     for (double invalid : {std::numeric_limits<double>::quiet_NaN(),
@@ -277,6 +387,13 @@ void TestValidationAndFailureAtomicity() {
   boundary.electric_field_strength_n_c = 100.001;
   CHECK(GetLorentzParticleConfigError(boundary) != nullptr);
 
+  LorentzParticleConfig underflow = config;
+  underflow.mass_kg = 1000.0;
+  underflow.charge_c = std::numeric_limits<double>::denorm_min();
+  CHECK(GetLorentzParticleConfigError(underflow) != nullptr);
+  underflow.magnetic_field_enabled = false;
+  CHECK(GetLorentzParticleConfigError(underflow) != nullptr);
+
   LorentzParticleConfig diagonal_boundary = config;
   diagonal_boundary.mass_kg = 1.0;
   diagonal_boundary.charge_c = 0.01;
@@ -292,6 +409,47 @@ void TestValidationAndFailureAtomicity() {
   rounding_boundary.magnetic_field_z_t = 60.0;
   CHECK(GetLorentzParticleConfigError(rounding_boundary) == nullptr);
 
+  LorentzParticleConfig gravity_boundary = config;
+  gravity_boundary.gravity_enabled = true;
+  gravity_boundary.gravitational_acceleration_m_s2 = 0.0;
+  CHECK(GetLorentzParticleConfigError(gravity_boundary) == nullptr);
+  gravity_boundary.gravitational_acceleration_m_s2 = 100.0;
+  CHECK(GetLorentzParticleConfigError(gravity_boundary) == nullptr);
+  gravity_boundary.gravitational_acceleration_m_s2 = -0.001;
+  CHECK(GetLorentzParticleConfigError(gravity_boundary) != nullptr);
+  gravity_boundary.gravitational_acceleration_m_s2 = 100.001;
+  CHECK(GetLorentzParticleConfigError(gravity_boundary) != nullptr);
+
+  LorentzParticleConfig constant_acceleration_boundary = config;
+  constant_acceleration_boundary.electric_field_strength_n_c = 9900.0;
+  constant_acceleration_boundary.electric_field_angle_degrees = -90.0;
+  constant_acceleration_boundary.magnetic_field_enabled = false;
+  constant_acceleration_boundary.gravity_enabled = true;
+  constant_acceleration_boundary.gravitational_acceleration_m_s2 = 100.0;
+  CHECK(GetLorentzParticleConfigError(constant_acceleration_boundary) ==
+        nullptr);
+  constant_acceleration_boundary.electric_field_strength_n_c = 9900.001;
+  CHECK(GetLorentzParticleConfigError(constant_acceleration_boundary) !=
+        nullptr);
+
+  LorentzParticleConfig diagonal_constant_boundary = config;
+  diagonal_constant_boundary.magnetic_field_enabled = false;
+  diagonal_constant_boundary.gravity_enabled = true;
+  diagonal_constant_boundary.gravitational_acceleration_m_s2 = 100.0;
+  constexpr double kBoundaryElectricX = 6000.0;
+  constexpr double kBoundaryElectricY = -7900.0;
+  diagonal_constant_boundary.electric_field_strength_n_c =
+      std::hypot(kBoundaryElectricX, kBoundaryElectricY);
+  diagonal_constant_boundary.electric_field_angle_degrees =
+      std::atan2(kBoundaryElectricY, kBoundaryElectricX) * 180.0 / kPi;
+  CHECK(GetLorentzParticleConfigError(diagonal_constant_boundary) == nullptr);
+  constexpr double kJustOverBoundaryElectricX = 6000.001;
+  diagonal_constant_boundary.electric_field_strength_n_c =
+      std::hypot(kJustOverBoundaryElectricX, kBoundaryElectricY);
+  diagonal_constant_boundary.electric_field_angle_degrees =
+      std::atan2(kBoundaryElectricY, kJustOverBoundaryElectricX) * 180.0 / kPi;
+  CHECK(GetLorentzParticleConfigError(diagonal_constant_boundary) != nullptr);
+
   LorentzParticleConfig disabled = config;
   disabled.mass_kg = 0.01;
   disabled.charge_c = 1000.0;
@@ -299,6 +457,8 @@ void TestValidationAndFailureAtomicity() {
   disabled.electric_field_strength_n_c = 1000000.0;
   disabled.magnetic_field_enabled = false;
   disabled.magnetic_field_z_t = 100.0;
+  disabled.gravity_enabled = false;
+  disabled.gravitational_acceleration_m_s2 = 100.0;
   CHECK(GetLorentzParticleConfigError(disabled) == nullptr);
 
   LorentzParticleState state = MakeInitialLorentzParticleState(config);
@@ -340,6 +500,26 @@ void TestTransientOutOfBoundsIsTerminal() {
   CHECK(state.x_m > tiny2d::sandbox::kLorentzMaximumX);
   CHECK(state.time_seconds > 0.0);
   CHECK(state.time_seconds < kLorentzPhysicsStep);
+}
+
+void TestGravityTransientOutOfBoundsIsTerminal() {
+  LorentzParticleConfig config;
+  config.charge_c = 0.0;
+  config.electric_field_enabled = false;
+  config.magnetic_field_enabled = false;
+  config.gravity_enabled = true;
+  config.gravitational_acceleration_m_s2 = 100.0;
+  const double peak_time = kLorentzPhysicsStep * 0.5;
+  LorentzParticleState state{
+      0.0, tiny2d::sandbox::kLorentzMaximumY,
+      0.0, config.gravitational_acceleration_m_s2 * peak_time,
+      0.0, LorentzParticleStatus::kActive,
+  };
+  CHECK(GetLorentzParticleStateError(config, state) == nullptr);
+  CHECK(StepLorentzParticle(config, kLorentzPhysicsStep, &state));
+  CHECK(state.status == LorentzParticleStatus::kOutOfBounds);
+  CHECK(state.y_m > tiny2d::sandbox::kLorentzMaximumY);
+  CHECK(Near(state.time_seconds, peak_time, 1e-12));
 }
 
 void TestTinyMagneticFieldTransientExit() {
@@ -409,6 +589,13 @@ int main() {
       NamedTest{"pure electric field", TestPureElectricFieldMatchesKinematics},
       NamedTest{"pure magnetic orbit", TestPureMagneticOrbitAndEnergy},
       NamedTest{"crossed-field drift", TestCrossedFieldDriftAfterOnePeriod},
+      NamedTest{"pure gravity and energy",
+                TestPureGravityMatchesKinematicsAndEnergy},
+      NamedTest{"electric-gravity balance", TestElectricFieldBalancesGravity},
+      NamedTest{"generalized constant-force drift",
+                TestGeneralizedConstantForceDrift},
+      NamedTest{"disabled and zero gravity preserve V12",
+                TestDisabledAndZeroGravityPreserveV12},
       NamedTest{"charge and magnetic signs",
                 TestChargeAndMagneticSignsIndependently},
       NamedTest{"zero charge and small B", TestZeroChargeAndSmallMagneticField},
@@ -416,6 +603,8 @@ int main() {
       NamedTest{"out-of-bounds terminal", TestOutOfBoundsTerminalState},
       NamedTest{"transient out-of-bounds terminal",
                 TestTransientOutOfBoundsIsTerminal},
+      NamedTest{"gravity transient out-of-bounds terminal",
+                TestGravityTransientOutOfBoundsIsTerminal},
       NamedTest{"tiny-B transient exit", TestTinyMagneticFieldTransientExit},
       NamedTest{"angled-field tiny-B transient exit",
                 TestAngledFieldTinyMagneticTransientExit},

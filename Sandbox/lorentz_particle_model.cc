@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace tiny2d::sandbox {
@@ -16,14 +17,19 @@ constexpr double kMaximumChargeMagnitudeC = 1000.0;
 constexpr double kMaximumInitialSpeedMps = 100.0;
 constexpr double kMaximumElectricFieldNc = 1000000.0;
 constexpr double kMaximumMagneticFieldT = 100.0;
+constexpr double kMaximumGravitationalAccelerationMps2 = 100.0;
 constexpr double kMaximumCyclotronFrequencyRadS = 60.0;
-constexpr double kMaximumElectricAccelerationMps2 = 10000.0;
+constexpr double kMaximumConstantAccelerationMps2 = 10000.0;
 constexpr double kSmallAngle = 0.001;
 
-struct FieldValues {
+struct Dynamics {
   double electric_x;
   double electric_y;
   double magnetic_z;
+  double gravity;
+  double constant_acceleration_x;
+  double constant_acceleration_y;
+  double angular_frequency;
 };
 
 struct AnalyticCoefficients {
@@ -51,7 +57,7 @@ bool IsInsideExperiment(double x, double y) {
          y >= kLorentzMinimumY && y <= kLorentzMaximumY;
 }
 
-FieldValues GetFields(const LorentzParticleConfig& config) {
+Dynamics GetDynamics(const LorentzParticleConfig& config) {
   double electric_x = 0.0;
   double electric_y = 0.0;
   if (config.electric_field_enabled) {
@@ -62,7 +68,16 @@ FieldValues GetFields(const LorentzParticleConfig& config) {
   }
   const double magnetic_z =
       config.magnetic_field_enabled ? config.magnetic_field_z_t : 0.0;
-  return {electric_x, electric_y, magnetic_z};
+  const double gravity =
+      config.gravity_enabled ? config.gravitational_acceleration_m_s2 : 0.0;
+  const double charge_over_mass = config.charge_c / config.mass_kg;
+  return {electric_x,
+          electric_y,
+          magnetic_z,
+          gravity,
+          charge_over_mass * electric_x,
+          charge_over_mass * electric_y - gravity,
+          charge_over_mass * magnetic_z};
 }
 
 AnalyticCoefficients GetAnalyticCoefficients(double theta) {
@@ -93,21 +108,23 @@ AnalyticCoefficients GetAnalyticCoefficients(double theta) {
 
 LorentzParticleDerived CalculateDerivedUnchecked(
     const LorentzParticleConfig& config, const LorentzParticleState& state) {
-  const FieldValues fields = GetFields(config);
-  const double charge_over_mass = config.charge_c / config.mass_kg;
+  const Dynamics dynamics = GetDynamics(config);
   const double acceleration_x =
-      charge_over_mass *
-      (fields.electric_x + state.velocity_y_m_s * fields.magnetic_z);
+      dynamics.constant_acceleration_x +
+      state.velocity_y_m_s * dynamics.angular_frequency;
   const double acceleration_y =
-      charge_over_mass *
-      (fields.electric_y - state.velocity_x_m_s * fields.magnetic_z);
+      dynamics.constant_acceleration_y -
+      state.velocity_x_m_s * dynamics.angular_frequency;
   const double speed = std::hypot(state.velocity_x_m_s, state.velocity_y_m_s);
   const double kinetic_energy = 0.5 * config.mass_kg * speed * speed;
   const double electric_potential_energy =
-      -config.charge_c * (fields.electric_x * (state.x_m - config.initial_x_m) +
-                          fields.electric_y * (state.y_m - config.initial_y_m));
-  const double total_energy = kinetic_energy + electric_potential_energy;
-  const double cyclotron_frequency = charge_over_mass * fields.magnetic_z;
+      -config.charge_c *
+      (dynamics.electric_x * (state.x_m - config.initial_x_m) +
+       dynamics.electric_y * (state.y_m - config.initial_y_m));
+  const double gravitational_potential_energy =
+      config.mass_kg * dynamics.gravity * (state.y_m - config.initial_y_m);
+  const double total_energy = kinetic_energy + electric_potential_energy +
+                              gravitational_potential_energy;
 
   LorentzParticleDerived derived{
       acceleration_x,
@@ -115,21 +132,30 @@ LorentzParticleDerived CalculateDerivedUnchecked(
       speed,
       kinetic_energy,
       electric_potential_energy,
+      gravitational_potential_energy,
       total_energy,
-      cyclotron_frequency,
+      dynamics.angular_frequency,
   };
-  if (config.charge_c != 0.0 && fields.magnetic_z != 0.0) {
+  if (config.charge_c != 0.0 && dynamics.magnetic_z != 0.0) {
     derived.has_cyclotron_data = true;
-    derived.cyclotron_period_s = 2.0 * kPi / std::abs(cyclotron_frequency);
-    derived.drift_velocity_x_m_s = fields.electric_y / fields.magnetic_z;
-    derived.drift_velocity_y_m_s = -fields.electric_x / fields.magnetic_z;
+    derived.cyclotron_period_s =
+        2.0 * kPi / std::abs(dynamics.angular_frequency);
+    if (dynamics.gravity == 0.0) {
+      derived.drift_velocity_x_m_s = dynamics.electric_y / dynamics.magnetic_z;
+      derived.drift_velocity_y_m_s = -dynamics.electric_x / dynamics.magnetic_z;
+    } else {
+      derived.drift_velocity_x_m_s =
+          dynamics.constant_acceleration_y / dynamics.angular_frequency;
+      derived.drift_velocity_y_m_s =
+          -dynamics.constant_acceleration_x / dynamics.angular_frequency;
+    }
     const double relative_velocity_x =
         state.velocity_x_m_s - derived.drift_velocity_x_m_s;
     const double relative_velocity_y =
         state.velocity_y_m_s - derived.drift_velocity_y_m_s;
     derived.larmor_radius_m =
         std::hypot(relative_velocity_x, relative_velocity_y) /
-        std::abs(cyclotron_frequency);
+        std::abs(dynamics.angular_frequency);
   }
   return derived;
 }
@@ -141,6 +167,7 @@ bool IsDerivedFinite(const LorentzParticleDerived& derived) {
       derived.speed_m_s,
       derived.kinetic_energy_j,
       derived.electric_potential_energy_j,
+      derived.gravitational_potential_energy_j,
       derived.total_energy_j,
       derived.cyclotron_angular_frequency_rad_s,
       derived.cyclotron_period_s,
@@ -154,12 +181,8 @@ bool IsDerivedFinite(const LorentzParticleDerived& derived) {
 LorentzParticleState AdvanceAnalyticallyUnchecked(
     const LorentzParticleConfig& config, const LorentzParticleState& state,
     double delta_time) {
-  const FieldValues fields = GetFields(config);
-  const double charge_over_mass = config.charge_c / config.mass_kg;
-  const double acceleration_x = charge_over_mass * fields.electric_x;
-  const double acceleration_y = charge_over_mass * fields.electric_y;
-  const double angular_frequency = charge_over_mass * fields.magnetic_z;
-  const double theta = angular_frequency * delta_time;
+  const Dynamics dynamics = GetDynamics(config);
+  const double theta = dynamics.angular_frequency * delta_time;
   const AnalyticCoefficients coefficients = GetAnalyticCoefficients(theta);
   const double sine_time = delta_time * coefficients.sine_over_theta;
   const double cosine_time =
@@ -174,20 +197,20 @@ LorentzParticleState AdvanceAnalyticallyUnchecked(
   LorentzParticleState next = state;
   next.velocity_x_m_s = coefficients.cosine * state.velocity_x_m_s +
                         coefficients.sine * state.velocity_y_m_s +
-                        sine_time * acceleration_x +
-                        cosine_time * acceleration_y;
+                        sine_time * dynamics.constant_acceleration_x +
+                        cosine_time * dynamics.constant_acceleration_y;
   next.velocity_y_m_s = coefficients.cosine * state.velocity_y_m_s -
                         coefficients.sine * state.velocity_x_m_s +
-                        sine_time * acceleration_y -
-                        cosine_time * acceleration_x;
+                        sine_time * dynamics.constant_acceleration_y -
+                        cosine_time * dynamics.constant_acceleration_x;
   next.x_m = state.x_m + sine_time * state.velocity_x_m_s +
              cosine_time * state.velocity_y_m_s +
-             cosine_time_squared * acceleration_x +
-             sine_time_squared * acceleration_y;
+             cosine_time_squared * dynamics.constant_acceleration_x +
+             sine_time_squared * dynamics.constant_acceleration_y;
   next.y_m = state.y_m + sine_time * state.velocity_y_m_s -
              cosine_time * state.velocity_x_m_s +
-             cosine_time_squared * acceleration_y -
-             sine_time_squared * acceleration_x;
+             cosine_time_squared * dynamics.constant_acceleration_y -
+             sine_time_squared * dynamics.constant_acceleration_x;
   next.time_seconds = state.time_seconds + delta_time;
   return next;
 }
@@ -253,34 +276,31 @@ bool FindOutOfBoundsSample(const LorentzParticleConfig& config,
   std::size_t candidate_count = 0;
   AddCandidateTime(delta_time, delta_time, &candidates, &candidate_count);
 
-  const FieldValues fields = GetFields(config);
-  const double charge_over_mass = config.charge_c / config.mass_kg;
-  const double acceleration_x = charge_over_mass * fields.electric_x;
-  const double acceleration_y = charge_over_mass * fields.electric_y;
-  const double angular_frequency = charge_over_mass * fields.magnetic_z;
-  if (angular_frequency == 0.0) {
-    if (acceleration_x != 0.0) {
-      AddCandidateTime(-state.velocity_x_m_s / acceleration_x, delta_time,
-                       &candidates, &candidate_count);
+  const Dynamics dynamics = GetDynamics(config);
+  if (dynamics.angular_frequency == 0.0) {
+    if (dynamics.constant_acceleration_x != 0.0) {
+      AddCandidateTime(-state.velocity_x_m_s / dynamics.constant_acceleration_x,
+                       delta_time, &candidates, &candidate_count);
     }
-    if (acceleration_y != 0.0) {
-      AddCandidateTime(-state.velocity_y_m_s / acceleration_y, delta_time,
-                       &candidates, &candidate_count);
+    if (dynamics.constant_acceleration_y != 0.0) {
+      AddCandidateTime(-state.velocity_y_m_s / dynamics.constant_acceleration_y,
+                       delta_time, &candidates, &candidate_count);
     }
   } else {
     AddTrigonometricVelocityRoots(
-        std::fma(-angular_frequency, state.velocity_x_m_s,
-                 2.0 * acceleration_y),
-        2.0 * std::fma(angular_frequency, state.velocity_y_m_s, acceleration_x),
-        angular_frequency * state.velocity_x_m_s, angular_frequency, delta_time,
-        &candidates, &candidate_count);
+        std::fma(-dynamics.angular_frequency, state.velocity_x_m_s,
+                 2.0 * dynamics.constant_acceleration_y),
+        2.0 * std::fma(dynamics.angular_frequency, state.velocity_y_m_s,
+                       dynamics.constant_acceleration_x),
+        dynamics.angular_frequency * state.velocity_x_m_s,
+        dynamics.angular_frequency, delta_time, &candidates, &candidate_count);
     AddTrigonometricVelocityRoots(
-        std::fma(-angular_frequency, state.velocity_y_m_s,
-                 -2.0 * acceleration_x),
-        2.0 *
-            std::fma(-angular_frequency, state.velocity_x_m_s, acceleration_y),
-        angular_frequency * state.velocity_y_m_s, angular_frequency, delta_time,
-        &candidates, &candidate_count);
+        std::fma(-dynamics.angular_frequency, state.velocity_y_m_s,
+                 -2.0 * dynamics.constant_acceleration_x),
+        2.0 * std::fma(-dynamics.angular_frequency, state.velocity_x_m_s,
+                       dynamics.constant_acceleration_y),
+        dynamics.angular_frequency * state.velocity_y_m_s,
+        dynamics.angular_frequency, delta_time, &candidates, &candidate_count);
   }
 
   std::sort(candidates.begin(), candidates.begin() + candidate_count);
@@ -309,6 +329,7 @@ const char* GetLorentzParticleConfigError(const LorentzParticleConfig& config) {
       config.electric_field_strength_n_c,
       config.electric_field_angle_degrees,
       config.magnetic_field_z_t,
+      config.gravitational_acceleration_m_s2,
   };
   if (!std::all_of(values.begin(), values.end(), IsFinite)) {
     return "All OrbitLab inputs must be finite.";
@@ -318,6 +339,9 @@ const char* GetLorentzParticleConfigError(const LorentzParticleConfig& config) {
   }
   if (std::abs(config.charge_c) > kMaximumChargeMagnitudeC) {
     return "Charge must be in [-1000, 1000] C.";
+  }
+  if (config.charge_c != 0.0 && config.charge_c / config.mass_kg == 0.0) {
+    return "The selected q/m is too small for stable OrbitLab calculations.";
   }
   if (!IsInsideExperiment(config.initial_x_m, config.initial_y_m)) {
     return "The initial position must be inside the 20 m by 12 m area.";
@@ -339,19 +363,36 @@ const char* GetLorentzParticleConfigError(const LorentzParticleConfig& config) {
   if (std::abs(config.magnetic_field_z_t) > kMaximumMagneticFieldT) {
     return "Magnetic field Bz must be in [-100, 100] T.";
   }
+  if (config.gravitational_acceleration_m_s2 < 0.0 ||
+      config.gravitational_acceleration_m_s2 >
+          kMaximumGravitationalAccelerationMps2) {
+    return "Gravitational acceleration must be in [0, 100] m/s^2.";
+  }
 
-  const FieldValues fields = GetFields(config);
+  const Dynamics dynamics = GetDynamics(config);
   const double electric_strength =
       config.electric_field_enabled ? config.electric_field_strength_n_c : 0.0;
   const double electric_force = std::abs(config.charge_c) * electric_strength;
-  if (electric_force > kMaximumElectricAccelerationMps2 * config.mass_kg) {
+  if (electric_force > kMaximumConstantAccelerationMps2 * config.mass_kg) {
     return "The selected qE/m exceeds the 10000 m/s^2 display limit.";
   }
   const double magnetic_charge_product =
-      std::abs(config.charge_c * fields.magnetic_z);
+      std::abs(config.charge_c * dynamics.magnetic_z);
   if (magnetic_charge_product >
       kMaximumCyclotronFrequencyRadS * config.mass_kg) {
     return "The selected |qBz/m| exceeds the 60 rad/s display limit.";
+  }
+  const double constant_force_x = config.charge_c * dynamics.electric_x;
+  const double constant_force_y =
+      config.charge_c * dynamics.electric_y - config.mass_kg * dynamics.gravity;
+  const double maximum_constant_force =
+      kMaximumConstantAccelerationMps2 * config.mass_kg;
+  const double rounded_maximum_constant_force = std::nextafter(
+      maximum_constant_force, std::numeric_limits<double>::infinity());
+  if (std::hypot(constant_force_x, constant_force_y) >
+      rounded_maximum_constant_force) {
+    return "The selected constant acceleration exceeds the 10000 m/s^2 "
+           "display limit.";
   }
 
   const double velocity_angle =

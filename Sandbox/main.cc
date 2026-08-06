@@ -94,11 +94,12 @@ ModelChoice ChooseModel(SDL_Renderer* renderer) {
     }
 
     ImGui::Spacing();
-    ImGui::TextUnformatted("V12 OrbitLab: Charged Particle in Uniform Fields");
+    ImGui::TextUnformatted("V13 Gravito-Orbit: Gravity in Uniform Fields");
     ImGui::TextWrapped(
-        "A free charged particle showing cyclotron motion, electric "
-        "acceleration, and E x B drift.");
-    if (ImGui::Button("Open V12 OrbitLab", {panel_width, kModelButtonHeight})) {
+        "Extends V12 exact charged-particle motion with uniform gravity, "
+        "potential energy, and combined-force drift.");
+    if (ImGui::Button("Open V13 Gravito-Orbit",
+                      {panel_width, kModelButtonHeight})) {
       choice = ModelChoice::kLorentzParticle;
     }
 
@@ -129,7 +130,7 @@ int main(int, char*[]) {
   }
 
   SDL_Window* window = SDL_CreateWindow(
-      "Tiny2D Engine V12", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+      "Tiny2D Engine V13", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
       kWindowWidth, kWindowHeight, SDL_WINDOW_SHOWN);
   if (window == nullptr) {
     ShowError("The application window could not be created.");

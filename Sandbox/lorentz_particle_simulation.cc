@@ -59,6 +59,14 @@ const char* GetStatusLabel(tiny2d::sandbox::LorentzParticleStatus status) {
   return "UNKNOWN";
 }
 
+tiny2d::sandbox::LorentzParticleConfig MakeGravitoOrbitPreset() {
+  tiny2d::sandbox::LorentzParticleConfig config;
+  config.electric_field_strength_n_c = 10.1;
+  config.gravity_enabled = true;
+  config.gravitational_acceleration_m_s2 = 9.8;
+  return config;
+}
+
 SetupAction DrawSetupScreen(tiny2d::sandbox::LorentzParticleConfig* config) {
   using tiny2d::sandbox::LorentzParticleConfig;
 
@@ -68,10 +76,10 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::LorentzParticleConfig* config) {
   constexpr ImGuiWindowFlags kWindowFlags = ImGuiWindowFlags_NoDecoration |
                                             ImGuiWindowFlags_NoMove |
                                             ImGuiWindowFlags_NoSavedSettings;
-  ImGui::Begin("OrbitLab setup", nullptr, kWindowFlags);
+  ImGui::Begin("Gravito-Orbit setup", nullptr, kWindowFlags);
 
   ImGui::TextColored({0.35f, 0.75f, 1.0f, 1.0f},
-                     "V12 OrbitLab: charged particle in uniform E and B");
+                     "V13 Gravito-Orbit: gravity in uniform E and B");
   ImGui::TextDisabled(
       "SI units; +X right, +Y up, +Z out of screen. Drag or type values.");
 
@@ -113,6 +121,12 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::LorentzParticleConfig* config) {
   SliderInputDouble("Signed Bz (+Z out / -Z in) (T)",
                     &config->magnetic_field_z_t, -100.0, 100.0, "%+.6g");
   ImGui::EndDisabled();
+  ImGui::Checkbox("Enable uniform gravity toward -Y", &config->gravity_enabled);
+  ImGui::BeginDisabled(!config->gravity_enabled);
+  SliderInputDouble("Gravity g (m/s^2)",
+                    &config->gravitational_acceleration_m_s2, 0.0, 100.0,
+                    "%.6g");
+  ImGui::EndDisabled();
 
   const char* error = tiny2d::sandbox::GetLorentzParticleConfigError(*config);
   if (error == nullptr) {
@@ -130,14 +144,18 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::LorentzParticleConfig* config) {
 
   const float spacing = ImGui::GetStyle().ItemSpacing.x;
   const float button_width =
-      (ImGui::GetContentRegionAvail().x - 2.0f * spacing) / 3.0f;
+      (ImGui::GetContentRegionAvail().x - 3.0f * spacing) / 4.0f;
   SetupAction action = SetupAction::kNone;
   if (ImGui::Button("Back to model selection", {button_width, 38.0f})) {
     action = SetupAction::kBack;
   }
   ImGui::SameLine();
-  if (ImGui::Button("Restore defaults", {button_width, 38.0f})) {
+  if (ImGui::Button("Load V12 E/B preset", {button_width, 38.0f})) {
     *config = LorentzParticleConfig{};
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Restore V13 defaults", {button_width, 38.0f})) {
+    *config = MakeGravitoOrbitPreset();
   }
   ImGui::SameLine();
   ImGui::BeginDisabled(error != nullptr);
@@ -250,7 +268,7 @@ void DrawScene(
 
   draw_list->AddText({layout.left, layout.top - 72.0f},
                      IM_COL32(95, 190, 255, 255),
-                     "OrbitLab | 20 m x 12 m physical plane");
+                     "Gravito-Orbit | 20 m x 12 m physical plane");
   draw_list->AddRect({layout.left, layout.top}, {layout.right, layout.bottom},
                      border_color, 0.0f, 0, 2.0f);
   draw_list->AddLine({layout.left, layout.center.y},
@@ -334,6 +352,17 @@ void DrawScene(
     draw_list->AddText({field_center.x - 56.0f, field_center.y + 26.0f},
                        IM_COL32(205, 125, 255, 255), label);
   }
+
+  if (config.gravity_enabled) {
+    const ImVec2 gravity_center{layout.center.x - 160.0f, layout.top - 44.0f};
+    DrawArrow(draw_list, gravity_center, {0.0f, 1.0f}, 72.0f,
+              IM_COL32(245, 190, 80, 255));
+    char label[72];
+    std::snprintf(label, sizeof(label), "g=%.4g m/s^2 toward -Y",
+                  config.gravitational_acceleration_m_s2);
+    draw_list->AddText({gravity_center.x + 18.0f, gravity_center.y - 8.0f},
+                       IM_COL32(255, 205, 95, 255), label);
+  }
 }
 
 bool DrawMonitor(
@@ -345,11 +374,11 @@ bool DrawMonitor(
   using tiny2d::sandbox::LorentzParticleStatus;
 
   ImGui::SetNextWindowPos({12.0f, 12.0f});
-  ImGui::SetNextWindowSize({410.0f, 760.0f});
+  ImGui::SetNextWindowSize({410.0f, 820.0f});
   constexpr ImGuiWindowFlags kWindowFlags =
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
-  ImGui::Begin("OrbitLab monitor", nullptr, kWindowFlags);
+  ImGui::Begin("Gravito-Orbit monitor", nullptr, kWindowFlags);
 
   const ImVec4 status_color =
       current_state.status == LorentzParticleStatus::kActive
@@ -422,6 +451,9 @@ bool DrawMonitor(
   ImGui::Text("Magnetic field: %s",
               config.magnetic_field_enabled ? "enabled" : "disabled");
   ImGui::Text("Bz: %+.7g T", config.magnetic_field_z_t);
+  ImGui::Text("Gravity: %s", config.gravity_enabled ? "enabled" : "disabled");
+  ImGui::Text("g: %.7g m/s^2 toward -Y",
+              config.gravitational_acceleration_m_s2);
 
   ImGui::Spacing();
   ImGui::TextUnformatted("Energy");
@@ -429,23 +461,25 @@ bool DrawMonitor(
   ImGui::Text("Kinetic: %.7g J", derived.kinetic_energy_j);
   ImGui::Text("Electric potential: %+.7g J",
               derived.electric_potential_energy_j);
+  ImGui::Text("Gravitational potential: %+.7g J",
+              derived.gravitational_potential_energy_j);
   ImGui::Text("Total: %+.7g J", derived.total_energy_j);
 
   ImGui::Spacing();
-  ImGui::TextUnformatted("Cyclotron and E x B data");
+  ImGui::TextUnformatted("Cyclotron and constant-force drift");
   ImGui::Separator();
   if (derived.has_cyclotron_data) {
     ImGui::Text("Cyclotron omega: %+.7g rad/s",
                 derived.cyclotron_angular_frequency_rad_s);
     ImGui::Text("Cyclotron period: %.7g s", derived.cyclotron_period_s);
     ImGui::Text("Larmor radius: %.7g m", derived.larmor_radius_m);
-    ImGui::Text("E x B drift: (%+.7g, %+.7g) m/s", derived.drift_velocity_x_m_s,
-                derived.drift_velocity_y_m_s);
+    ImGui::Text("Constant-force drift: (%+.7g, %+.7g) m/s",
+                derived.drift_velocity_x_m_s, derived.drift_velocity_y_m_s);
   } else {
     ImGui::TextUnformatted("Cyclotron omega: N/A");
     ImGui::TextUnformatted("Cyclotron period: N/A");
     ImGui::TextUnformatted("Larmor radius: N/A");
-    ImGui::TextUnformatted("E x B drift: N/A");
+    ImGui::TextUnformatted("Constant-force drift: N/A");
   }
 
   if (runtime_error != nullptr) {
@@ -488,7 +522,7 @@ SimulationResult RunLorentzParticleSimulation(SDL_Renderer* renderer) {
     return SimulationResult::kBackToSelection;
   }
 
-  LorentzParticleConfig config;
+  LorentzParticleConfig config = MakeGravitoOrbitPreset();
   LorentzParticleState state = MakeInitialLorentzParticleState(config);
   // ponytail: Keep one laboratory run in memory; cap it only if long-running
   // sessions become a demonstrated use case.

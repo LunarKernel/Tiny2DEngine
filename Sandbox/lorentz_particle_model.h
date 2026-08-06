@@ -31,6 +31,8 @@ struct LorentzParticleConfig {
   double electric_field_angle_degrees{90.0};
   bool magnetic_field_enabled{true};
   double magnetic_field_z_t{1.0};
+  bool gravity_enabled{false};
+  double gravitational_acceleration_m_s2{9.8};
 };
 
 struct LorentzParticleState {
@@ -48,8 +50,11 @@ struct LorentzParticleDerived {
   double speed_m_s{};
   double kinetic_energy_j{};
   // Electric potential energy is measured relative to the configured initial
-  // position, so total_energy_j has a stable and explicit zero point.
+  // position.
   double electric_potential_energy_j{};
+  // Gravitational potential energy is measured relative to the configured
+  // initial height, so total_energy_j has a stable and explicit zero point.
+  double gravitational_potential_energy_j{};
   double total_energy_j{};
   // omega = q * B_z / m is signed. Positive values rotate velocity from +X
   // toward -Y, which appears clockwise on screen.
@@ -66,8 +71,11 @@ struct LorentzParticleDerived {
 // Valid ranges are: mass [0.01, 1000] kg, charge [-1000, 1000] C,
 // initial position within x [-10, 10] m and y [-6, 6] m, initial speed
 // [0, 100] m/s, angles [-180, 180] degrees, E [0, 1e6] N/C, and B_z
-// [-100, 100] T. Effective fields must also satisfy |q B_z / m| <= 60
-// rad/s and |q E / m| <= 10000 m/s^2 so the fixed display sampling remains
+// [-100, 100] T, and gravitational acceleration [0, 100] m/s^2. When enabled,
+// gravity points along -Y. A nonzero q/m must be representable. Effective
+// fields must also satisfy
+// |q B_z / m| <= 60 rad/s, |q E / m| <= 10000 m/s^2, and
+// |q E / m + (0, -g)| <= 10000 m/s^2 so the fixed display sampling remains
 // meaningful. Returns nullptr when valid.
 const char* GetLorentzParticleConfigError(const LorentzParticleConfig& config);
 
