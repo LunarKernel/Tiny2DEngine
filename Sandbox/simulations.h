@@ -13,6 +13,7 @@ enum class SimulationResult {
 SimulationResult RunInclineSpringSimulation(SDL_Renderer* renderer);
 SimulationResult RunRotationPendulumSimulation(SDL_Renderer* renderer);
 SimulationResult RunRollingDiskSimulation(SDL_Renderer* renderer);
+SimulationResult RunLorentzParticleSimulation(SDL_Renderer* renderer);
 
 }  // namespace tiny2d::sandbox
 

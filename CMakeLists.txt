@@ -56,6 +56,7 @@ tiny2d_enable_warnings(Tiny2DEngine)
 if(TINY2D_BUILD_SANDBOX OR BUILD_TESTING)
   add_library(Tiny2DSimulationModels STATIC
       Sandbox/incline_spring_model.cc
+      Sandbox/lorentz_particle_model.cc
       Sandbox/rolling_disk_model.cc
       Sandbox/rotation_pendulum_model.cc
   )
@@ -73,6 +74,7 @@ if(TINY2D_BUILD_SANDBOX)
   add_executable(Sandbox WIN32
       Sandbox/main.cc
       Sandbox/incline_spring_simulation.cc
+      Sandbox/lorentz_particle_simulation.cc
       Sandbox/rolling_disk_simulation.cc
       Sandbox/rotation_pendulum_simulation.cc
   )
@@ -128,4 +130,16 @@ if(BUILD_TESTING)
 
   add_test(NAME Tiny2DRollingDiskTests COMMAND Tiny2DRollingDiskTests)
   set_tests_properties(Tiny2DRollingDiskTests PROPERTIES TIMEOUT 30)
+
+  add_executable(Tiny2DLorentzParticleTests
+      Sandbox/lorentz_particle_test.cc
+  )
+
+  target_link_libraries(Tiny2DLorentzParticleTests
+      PRIVATE Tiny2DSimulationModels
+  )
+  tiny2d_enable_warnings(Tiny2DLorentzParticleTests)
+
+  add_test(NAME Tiny2DLorentzParticleTests COMMAND Tiny2DLorentzParticleTests)
+  set_tests_properties(Tiny2DLorentzParticleTests PROPERTIES TIMEOUT 30)
 endif()

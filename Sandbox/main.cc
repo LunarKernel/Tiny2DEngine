@@ -17,6 +17,7 @@ enum class ModelChoice {
   kInclineSpring,
   kRotationPendulum,
   kRollingDisk,
+  kLorentzParticle,
   kQuit,
 };
 
@@ -55,7 +56,7 @@ ModelChoice ChooseModel(SDL_Renderer* renderer) {
     const float panel_width = std::min(kPanelWidth, display_size.x - 48.0f);
     ImGui::SetCursorPosX(
         std::max(24.0f, (display_size.x - panel_width) * 0.5f));
-    ImGui::SetCursorPosY(95.0f);
+    ImGui::SetCursorPosY(25.0f);
     ImGui::BeginGroup();
     ImGui::TextColored({0.35f, 0.75f, 1.0f, 1.0f}, "Tiny2D Physics Lab");
     ImGui::TextUnformatted("Choose a simulation model");
@@ -66,29 +67,39 @@ ModelChoice ChooseModel(SDL_Renderer* renderer) {
     ModelChoice choice = ModelChoice::kNone;
     ImGui::TextUnformatted("V9 Stable: Incline / Spring / Electric Field");
     ImGui::TextWrapped(
-        "The validated V9 model with two blocks, ramp, floor, spring, uniform "
-        "electric field, SI calibration, telemetry, and history inspection.");
-    if (ImGui::Button("Open V9 incline laboratory", {panel_width, 74.0f})) {
+        "Two blocks, ramp, floor, spring, electric field, SI telemetry, and "
+        "history.");
+    constexpr float kModelButtonHeight = 36.0f;
+    if (ImGui::Button("Open V9 incline laboratory",
+                      {panel_width, kModelButtonHeight})) {
       choice = ModelChoice::kInclineSpring;
     }
 
     ImGui::Spacing();
     ImGui::TextUnformatted("V10 PivotLab: Charged Physical Pendulum");
     ImGui::TextWrapped(
-        "A uniform rod with a movable charged point mass. Explore moment of "
-        "inertia, gravity and electric torque, damping, period, and energy.");
-    if (ImGui::Button("Open V10 PivotLab", {panel_width, 74.0f})) {
+        "A movable charged mass on a physical pendulum: torque, damping, "
+        "period, and energy.");
+    if (ImGui::Button("Open V10 PivotLab", {panel_width, kModelButtonHeight})) {
       choice = ModelChoice::kRotationPendulum;
     }
 
     ImGui::Spacing();
     ImGui::TextUnformatted("V11 RollLab: Sliding / Rolling Transition");
     ImGui::TextWrapped(
-        "A disk or hoop on an incline with static and kinetic friction. "
-        "Observe slipping, pure rolling, energy transfer, and electric and "
-        "magnetic-field effects.");
-    if (ImGui::Button("Open V11 RollLab", {panel_width, 74.0f})) {
+        "A disk or hoop sliding into pure rolling under friction and uniform "
+        "electric and magnetic fields.");
+    if (ImGui::Button("Open V11 RollLab", {panel_width, kModelButtonHeight})) {
       choice = ModelChoice::kRollingDisk;
+    }
+
+    ImGui::Spacing();
+    ImGui::TextUnformatted("V12 OrbitLab: Charged Particle in Uniform Fields");
+    ImGui::TextWrapped(
+        "A free charged particle showing cyclotron motion, electric "
+        "acceleration, and E x B drift.");
+    if (ImGui::Button("Open V12 OrbitLab", {panel_width, kModelButtonHeight})) {
+      choice = ModelChoice::kLorentzParticle;
     }
 
     ImGui::Spacing();
@@ -118,7 +129,7 @@ int main(int, char*[]) {
   }
 
   SDL_Window* window = SDL_CreateWindow(
-      "Tiny2D Engine V11", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+      "Tiny2D Engine V12", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
       kWindowWidth, kWindowHeight, SDL_WINDOW_SHOWN);
   if (window == nullptr) {
     ShowError("The application window could not be created.");
@@ -183,6 +194,8 @@ int main(int, char*[]) {
       result = tiny2d::sandbox::RunRotationPendulumSimulation(renderer);
     } else if (choice == ModelChoice::kRollingDisk) {
       result = tiny2d::sandbox::RunRollingDiskSimulation(renderer);
+    } else if (choice == ModelChoice::kLorentzParticle) {
+      result = tiny2d::sandbox::RunLorentzParticleSimulation(renderer);
     } else {
       break;
     }
