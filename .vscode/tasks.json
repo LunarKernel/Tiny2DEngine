@@ -27,6 +27,36 @@
       "preset": "test-debug",
       "dependsOn": "CMake: Build",
       "problemMatcher": []
+    },
+    {
+      "label": "Workflow: Fast Verify",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/tools/verify.ps1",
+        "-Profile",
+        "Fast"
+      ],
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Workflow: Full Verify",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/tools/verify.ps1",
+        "-Profile",
+        "Full"
+      ],
+      "problemMatcher": "$msCompile"
     }
   ]
 }
