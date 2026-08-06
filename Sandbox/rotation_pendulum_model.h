@@ -18,6 +18,8 @@ inline constexpr float kMaximumChargeMagnitude = 1000.0f;
 inline constexpr float kMaximumElectricField = 1000000.0f;
 inline constexpr float kMaximumDamping = 1000.0f;
 inline constexpr float kMaximumInitialAngularSpeed = 50.0f;
+inline constexpr float kMaximumDriveTorque = 1000.0f;
+inline constexpr float kMaximumDriveAngularFrequency = 60.0f;
 
 // SI units are used throughout. Angles are measured counterclockwise from the
 // vertically downward direction. Electric-field angles are measured
@@ -27,6 +29,8 @@ inline constexpr float kMaximumInitialAngularSpeed = 50.0f;
 // angle [-180, 180] degrees, initial angular speed [-50, 50] rad/s, gravity
 // 9.8 or 10 m/s^2, electric-field magnitude [0, 1e6] N/C and angle
 // [-180, 180] degrees, and damping coefficient [0, 1000] N*m*s/rad.
+// A periodic drive applies A*cos(omega*t) N*m, where positive torque is
+// counterclockwise, A is in [0, 1000] N*m, and omega is in [0, 60] rad/s.
 struct PendulumConfig {
   float rod_length_m{2.0f};
   float rod_mass_kg{2.0f};
@@ -42,6 +46,9 @@ struct PendulumConfig {
   float electric_field_angle_degrees{};
   bool damping_enabled{};
   float damping_coefficient_n_m_s{0.1f};
+  bool drive_enabled{};
+  float drive_torque_amplitude_n_m{};
+  float drive_angular_frequency_rad_s{};
 };
 
 struct PendulumState {
@@ -56,6 +63,8 @@ struct PendulumDerived {
   float gravity_torque_n_m{};
   float electric_torque_n_m{};
   float damping_torque_n_m{};
+  float driving_torque_n_m{};
+  float driving_power_w{};
   float total_torque_n_m{};
   float angular_acceleration_rad_s2{};
   float kinetic_energy_j{};

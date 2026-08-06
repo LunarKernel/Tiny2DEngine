@@ -48,6 +48,20 @@ bool PendulumSliderInputFloat(const char* label, float* value, float minimum,
   return changed;
 }
 
+PendulumConfig MakeDrivenPendulumConfig() {
+  PendulumConfig config;
+  config.initial_angle_degrees = 0.0f;
+  config.initial_angular_velocity_rad_s = 0.0f;
+  config.electric_field_enabled = false;
+  config.damping_enabled = true;
+  config.damping_coefficient_n_m_s = 1.0f;
+  config.drive_enabled = true;
+  config.drive_torque_amplitude_n_m = 2.0f;
+  config.drive_angular_frequency_rad_s =
+      2.0f * kPendulumPi / GetSmallAnglePeriod(config);
+  return config;
+}
+
 PendulumSetupAction DrawPendulumSetupScreen(PendulumConfig* config) {
   ImGuiIO& io = ImGui::GetIO();
   ImGui::SetNextWindowPos({0.0f, 0.0f});
@@ -55,10 +69,10 @@ PendulumSetupAction DrawPendulumSetupScreen(PendulumConfig* config) {
   constexpr ImGuiWindowFlags kWindowFlags = ImGuiWindowFlags_NoDecoration |
                                             ImGuiWindowFlags_NoMove |
                                             ImGuiWindowFlags_NoSavedSettings;
-  ImGui::Begin("PivotLab setup", nullptr, kWindowFlags);
+  ImGui::Begin("Driven PivotLab setup", nullptr, kWindowFlags);
 
   ImGui::TextColored({0.35f, 0.75f, 1.0f, 1.0f},
-                     "PivotLab: charged physical pendulum");
+                     "V14 Driven PivotLab: forced damped physical pendulum");
   ImGui::TextDisabled(
       "Drag a slider or type an exact SI value. Out-of-range finite values "
       "are clamped.");
@@ -128,30 +142,51 @@ PendulumSetupAction DrawPendulumSetupScreen(PendulumConfig* config) {
                            kMaximumDamping, "%.4g");
   ImGui::EndDisabled();
 
+  ImGui::Spacing();
+  ImGui::TextUnformatted("Periodic driving torque");
+  ImGui::Separator();
+  ImGui::Checkbox("Enable periodic drive", &config->drive_enabled);
+  ImGui::BeginDisabled(!config->drive_enabled);
+  PendulumSliderInputFloat("Drive amplitude A (N*m)",
+                           &config->drive_torque_amplitude_n_m, 0.0f,
+                           kMaximumDriveTorque, "%.4g");
+  PendulumSliderInputFloat("Drive angular frequency omega_d (rad/s)",
+                           &config->drive_angular_frequency_rad_s, 0.0f,
+                           kMaximumDriveAngularFrequency, "%.4g");
+  ImGui::TextDisabled(
+      "tau_drive(t) = A cos(omega_d t); positive torque is CCW.");
+  ImGui::EndDisabled();
+
   const char* error = GetPendulumConfigError(*config);
   if (error == nullptr) {
+    const float small_angle_period = GetSmallAnglePeriod(*config);
     ImGui::TextColored({0.35f, 0.85f, 0.45f, 1.0f},
-                       "Ready | I = %.4f kg*m^2 | small-oscillation T = %.4f s",
-                       GetPendulumMomentOfInertia(*config),
-                       GetSmallAnglePeriod(*config));
+                       "Ready | I = %.4f kg*m^2 | T0 = %.4f s | omega0 = %.4f "
+                       "rad/s",
+                       GetPendulumMomentOfInertia(*config), small_angle_period,
+                       2.0f * kPendulumPi / small_angle_period);
   } else {
     ImGui::TextColored({1.0f, 0.35f, 0.35f, 1.0f}, "%s", error);
   }
 
   const float spacing = ImGui::GetStyle().ItemSpacing.x;
   const float button_width =
-      (ImGui::GetContentRegionAvail().x - 2.0f * spacing) / 3.0f;
+      (ImGui::GetContentRegionAvail().x - 3.0f * spacing) / 4.0f;
   PendulumSetupAction action = PendulumSetupAction::kNone;
-  if (ImGui::Button("Back to model selection", {button_width, 38.0f})) {
+  if (ImGui::Button("Back", {button_width, 38.0f})) {
     action = PendulumSetupAction::kBack;
   }
   ImGui::SameLine();
-  if (ImGui::Button("Restore defaults", {button_width, 38.0f})) {
+  if (ImGui::Button("Load V10 baseline", {button_width, 38.0f})) {
     *config = PendulumConfig{};
   }
   ImGui::SameLine();
+  if (ImGui::Button("Load V14 resonance preset", {button_width, 38.0f})) {
+    *config = MakeDrivenPendulumConfig();
+  }
+  ImGui::SameLine();
   ImGui::BeginDisabled(error != nullptr);
-  if (ImGui::Button("Start simulation", {button_width, 38.0f})) {
+  if (ImGui::Button("Start", {button_width, 38.0f})) {
     action = PendulumSetupAction::kStart;
   }
   ImGui::EndDisabled();
@@ -276,11 +311,11 @@ bool DrawPendulumMonitor(const PendulumConfig& config,
                          bool* paused, float* inspect_time, bool* follow_live,
                          const char* runtime_error) {
   ImGui::SetNextWindowPos({12.0f, 12.0f});
-  ImGui::SetNextWindowSize({410.0f, 560.0f});
+  ImGui::SetNextWindowSize({430.0f, 650.0f});
   constexpr ImGuiWindowFlags kWindowFlags =
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
-  ImGui::Begin("PivotLab monitor", nullptr, kWindowFlags);
+  ImGui::Begin("Driven PivotLab monitor", nullptr, kWindowFlags);
 
   ImGui::TextColored(*paused ? ImVec4{1.0f, 0.7f, 0.25f, 1.0f}
                              : ImVec4{0.35f, 0.9f, 0.5f, 1.0f},
@@ -331,7 +366,21 @@ bool DrawPendulumMonitor(const PendulumConfig& config,
   ImGui::Text("alpha: %+.6f rad/s^2",
               inspected_state->angular_acceleration_rad_s2);
   ImGui::Text("I: %.6f kg*m^2", derived.moment_of_inertia_kg_m2);
-  ImGui::Text("Small-oscillation period: %.6f s", GetSmallAnglePeriod(config));
+  const float small_angle_period = GetSmallAnglePeriod(config);
+  const float natural_angular_frequency =
+      2.0f * kPendulumPi / small_angle_period;
+  ImGui::Text("Small-oscillation period: %.6f s", small_angle_period);
+  ImGui::Text("Natural omega0: %.6f rad/s", natural_angular_frequency);
+  if (config.drive_enabled) {
+    ImGui::Text("Drive: A = %.6f N*m | omega_d = %.6f rad/s",
+                config.drive_torque_amplitude_n_m,
+                config.drive_angular_frequency_rad_s);
+    ImGui::Text(
+        "Frequency ratio omega_d/omega0: %.6f",
+        config.drive_angular_frequency_rad_s / natural_angular_frequency);
+  } else {
+    ImGui::TextDisabled("Periodic drive disabled (V10 behavior)");
+  }
 
   ImGui::Spacing();
   ImGui::TextUnformatted("Torques (N*m)");
@@ -339,16 +388,22 @@ bool DrawPendulumMonitor(const PendulumConfig& config,
   ImGui::Text("gravity: %+.6f", derived.gravity_torque_n_m);
   ImGui::Text("electric: %+.6f", derived.electric_torque_n_m);
   ImGui::Text("damping: %+.6f", derived.damping_torque_n_m);
+  ImGui::Text("drive: %+.6f", derived.driving_torque_n_m);
   ImGui::Text("total: %+.6f", derived.total_torque_n_m);
+  ImGui::Text("instantaneous drive power: %+.6f W", derived.driving_power_w);
 
   ImGui::Spacing();
-  ImGui::TextUnformatted("Energy (J)");
+  ImGui::TextUnformatted("Mechanical energy (J)");
   ImGui::Separator();
   ImGui::Text("kinetic: %+.6f", derived.kinetic_energy_j);
   ImGui::Text("gravity potential: %+.6f",
               derived.gravitational_potential_energy_j);
   ImGui::Text("electric potential: %+.6f", derived.electric_potential_energy_j);
-  ImGui::Text("total: %+.6f", derived.total_energy_j);
+  ImGui::Text("mechanical total: %+.6f", derived.total_energy_j);
+  if (config.drive_enabled || config.damping_enabled) {
+    ImGui::TextDisabled(
+        "Mechanical energy is not conserved with drive or damping.");
+  }
 
   if (runtime_error != nullptr) {
     ImGui::Spacing();
@@ -374,7 +429,7 @@ SimulationResult RunRotationPendulumSimulation(SDL_Renderer* renderer) {
     return SimulationResult::kBackToSelection;
   }
 
-  PendulumConfig config;
+  PendulumConfig config = MakeDrivenPendulumConfig();
   PendulumState state = MakeInitialPendulumState(config);
   // ponytail: Match V9 and keep one run in memory; cap only for long sessions.
   std::vector<PendulumState> history;

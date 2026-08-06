@@ -19,6 +19,8 @@ using tiny2d::sandbox::GetSmallAnglePeriod;
 using tiny2d::sandbox::IsPendulumDerivedFinite;
 using tiny2d::sandbox::kMaximumChargeMagnitude;
 using tiny2d::sandbox::kMaximumDamping;
+using tiny2d::sandbox::kMaximumDriveAngularFrequency;
+using tiny2d::sandbox::kMaximumDriveTorque;
 using tiny2d::sandbox::kMaximumElectricField;
 using tiny2d::sandbox::kMaximumInitialAngularSpeed;
 using tiny2d::sandbox::kMaximumMass;
@@ -67,6 +69,32 @@ PendulumState MakeTestState(const PendulumConfig& config, float angle,
   return state;
 }
 
+void CheckStateExactlyEqual(const PendulumState& actual,
+                            const PendulumState& expected) {
+  CHECK(actual.angle_radians == expected.angle_radians);
+  CHECK(actual.angular_velocity_rad_s == expected.angular_velocity_rad_s);
+  CHECK(actual.angular_acceleration_rad_s2 ==
+        expected.angular_acceleration_rad_s2);
+  CHECK(actual.time_seconds == expected.time_seconds);
+}
+
+void CheckLegacyDerivedExactlyEqual(const PendulumDerived& actual,
+                                    const PendulumDerived& expected) {
+  CHECK(actual.moment_of_inertia_kg_m2 == expected.moment_of_inertia_kg_m2);
+  CHECK(actual.gravity_torque_n_m == expected.gravity_torque_n_m);
+  CHECK(actual.electric_torque_n_m == expected.electric_torque_n_m);
+  CHECK(actual.damping_torque_n_m == expected.damping_torque_n_m);
+  CHECK(actual.total_torque_n_m == expected.total_torque_n_m);
+  CHECK(actual.angular_acceleration_rad_s2 ==
+        expected.angular_acceleration_rad_s2);
+  CHECK(actual.kinetic_energy_j == expected.kinetic_energy_j);
+  CHECK(actual.gravitational_potential_energy_j ==
+        expected.gravitational_potential_energy_j);
+  CHECK(actual.electric_potential_energy_j ==
+        expected.electric_potential_energy_j);
+  CHECK(actual.total_energy_j == expected.total_energy_j);
+}
+
 void TestFormulaAnchorsAndSemiImplicitStep() {
   PendulumConfig config;
   config.rod_length_m = 2.0f;
@@ -94,6 +122,124 @@ void TestFormulaAnchorsAndSemiImplicitStep() {
   CHECK(Near(state.angular_velocity_rad_s, 1.4666667f));
   CHECK(Near(state.angle_radians, 1.7174630f));
   CHECK(Near(state.time_seconds, kStep));
+}
+
+void TestDrivePhasePowerAndStepSampling() {
+  PendulumConfig config;
+  config.drive_enabled = true;
+  config.drive_torque_amplitude_n_m = 12.0f;
+  config.drive_angular_frequency_rad_s = 2.0f;
+
+  PendulumState state = MakeTestState(config, 0.3f, 3.0f);
+  PendulumDerived derived = CalculatePendulumDerived(config, state);
+  CHECK(Near(derived.driving_torque_n_m, 12.0f));
+  CHECK(Near(derived.driving_power_w, 36.0f));
+  CHECK(Near(derived.total_torque_n_m,
+             derived.gravity_torque_n_m + derived.electric_torque_n_m +
+                 derived.damping_torque_n_m + derived.driving_torque_n_m));
+
+  state.time_seconds = kPendulumPi * 0.25f;
+  derived = CalculatePendulumDerived(config, state);
+  CHECK(Near(derived.driving_torque_n_m, 0.0f, 0.00001f));
+  CHECK(Near(derived.driving_power_w, 0.0f, 0.00005f));
+
+  state.time_seconds = kPendulumPi * 0.5f;
+  derived = CalculatePendulumDerived(config, state);
+  CHECK(Near(derived.driving_torque_n_m, -12.0f));
+  CHECK(Near(derived.driving_power_w, -36.0f));
+
+  state = MakeTestState(config, 0.3f, 0.2f);
+  const PendulumDerived before = CalculatePendulumDerived(config, state);
+  constexpr float kStep = 0.01f;
+  const float expected_velocity =
+      state.angular_velocity_rad_s + before.angular_acceleration_rad_s2 * kStep;
+  const float expected_angle = std::remainder(
+      state.angle_radians + expected_velocity * kStep, 2.0f * kPendulumPi);
+  CHECK(StepPendulum(config, kStep, &state));
+  CHECK(Near(state.angular_velocity_rad_s, expected_velocity));
+  CHECK(Near(state.angle_radians, expected_angle));
+  CHECK(Near(state.time_seconds, kStep));
+  CHECK(Near(
+      state.angular_acceleration_rad_s2,
+      CalculatePendulumDerived(config, state).angular_acceleration_rad_s2));
+}
+
+void TestDisabledAndZeroDrivePreserveLegacyTrajectory() {
+  PendulumConfig legacy_config;
+  PendulumConfig disabled_config = legacy_config;
+  disabled_config.drive_torque_amplitude_n_m = kMaximumDriveTorque;
+  disabled_config.drive_angular_frequency_rad_s = kMaximumDriveAngularFrequency;
+  PendulumConfig zero_amplitude_config = legacy_config;
+  zero_amplitude_config.drive_enabled = true;
+  zero_amplitude_config.drive_angular_frequency_rad_s =
+      kMaximumDriveAngularFrequency;
+
+  CHECK(GetPendulumConfigError(legacy_config) == nullptr);
+  CHECK(GetPendulumConfigError(disabled_config) == nullptr);
+  CHECK(GetPendulumConfigError(zero_amplitude_config) == nullptr);
+  PendulumState legacy = MakeInitialPendulumState(legacy_config);
+  PendulumState disabled = MakeInitialPendulumState(disabled_config);
+  PendulumState zero_amplitude =
+      MakeInitialPendulumState(zero_amplitude_config);
+  for (int step = 0; step < 1000; ++step) {
+    const PendulumDerived legacy_derived =
+        CalculatePendulumDerived(legacy_config, legacy);
+    const PendulumDerived disabled_derived =
+        CalculatePendulumDerived(disabled_config, disabled);
+    const PendulumDerived zero_derived =
+        CalculatePendulumDerived(zero_amplitude_config, zero_amplitude);
+    CheckLegacyDerivedExactlyEqual(disabled_derived, legacy_derived);
+    CheckLegacyDerivedExactlyEqual(zero_derived, legacy_derived);
+    CHECK(disabled_derived.driving_torque_n_m == 0.0f);
+    CHECK(disabled_derived.driving_power_w == 0.0f);
+    CHECK(zero_derived.driving_torque_n_m == 0.0f);
+    CHECK(zero_derived.driving_power_w == 0.0f);
+
+    CHECK(StepPendulum(legacy_config, kPendulumPhysicsStep, &legacy));
+    CHECK(StepPendulum(disabled_config, kPendulumPhysicsStep, &disabled));
+    CHECK(StepPendulum(zero_amplitude_config, kPendulumPhysicsStep,
+                       &zero_amplitude));
+    CheckStateExactlyEqual(disabled, legacy);
+    CheckStateExactlyEqual(zero_amplitude, legacy);
+  }
+}
+
+float MeasureDrivenPeakAngle(PendulumConfig config, float start_time,
+                             float end_time) {
+  PendulumState state = MakeInitialPendulumState(config);
+  float peak_angle = 0.0f;
+  while (state.time_seconds < end_time) {
+    CHECK(StepPendulum(config, kPendulumPhysicsStep, &state));
+    if (state.time_seconds >= start_time) {
+      peak_angle = std::max(peak_angle, std::abs(state.angle_radians));
+    }
+  }
+  return peak_angle;
+}
+
+void TestResonantResponse() {
+  PendulumConfig config;
+  config.rod_length_m = 2.0f;
+  config.rod_mass_kg = 3.0f;
+  config.counterweight_mass_kg = 2.0f;
+  config.counterweight_distance_m = 1.0f;
+  config.initial_angle_degrees = 0.0f;
+  config.gravity_m_s2 = 10.0f;
+  config.electric_field_enabled = false;
+  config.damping_enabled = true;
+  config.damping_coefficient_n_m_s = 1.0f;
+  config.drive_enabled = true;
+  config.drive_torque_amplitude_n_m = 0.5f;
+  const float natural_frequency =
+      2.0f * kPendulumPi / GetSmallAnglePeriod(config);
+
+  config.drive_angular_frequency_rad_s = natural_frequency;
+  CHECK(GetPendulumConfigError(config) == nullptr);
+  const float resonant_peak = MeasureDrivenPeakAngle(config, 20.0f, 30.0f);
+  config.drive_angular_frequency_rad_s = 1.8f * natural_frequency;
+  CHECK(GetPendulumConfigError(config) == nullptr);
+  const float off_resonant_peak = MeasureDrivenPeakAngle(config, 20.0f, 30.0f);
+  CHECK(resonant_peak >= 5.0f * off_resonant_peak);
 }
 
 void TestHistoryLookup() {
@@ -261,7 +407,7 @@ void TestValidationNonFiniteAndDangerousInputs() {
       std::numeric_limits<float>::infinity(),
       -std::numeric_limits<float>::infinity(),
   };
-  constexpr std::array<float PendulumConfig::*, 11> config_fields = {
+  constexpr std::array<float PendulumConfig::*, 13> config_fields = {
       &PendulumConfig::rod_length_m,
       &PendulumConfig::rod_mass_kg,
       &PendulumConfig::counterweight_mass_kg,
@@ -273,6 +419,8 @@ void TestValidationNonFiniteAndDangerousInputs() {
       &PendulumConfig::electric_field_strength_n_c,
       &PendulumConfig::electric_field_angle_degrees,
       &PendulumConfig::damping_coefficient_n_m_s,
+      &PendulumConfig::drive_torque_amplitude_n_m,
+      &PendulumConfig::drive_angular_frequency_rad_s,
   };
   for (float invalid_value : invalid_values) {
     for (float PendulumConfig::* field : config_fields) {
@@ -314,6 +462,11 @@ void TestValidationNonFiniteAndDangerousInputs() {
   config.damping_enabled = false;
   config.damping_coefficient_n_m_s = kMaximumDamping;
   CHECK(GetPendulumConfigError(config) == nullptr);
+  config = PendulumConfig{};
+  config.drive_enabled = true;
+  config.drive_torque_amplitude_n_m = kMaximumDriveTorque;
+  config.drive_angular_frequency_rad_s = kMaximumDriveAngularFrequency;
+  CHECK(GetPendulumConfigError(config) == nullptr);
 
   config = PendulumConfig{};
   config.rod_length_m = kMinimumRodLength - 0.001f;
@@ -351,6 +504,18 @@ void TestValidationNonFiniteAndDangerousInputs() {
   config = PendulumConfig{};
   config.damping_coefficient_n_m_s = -0.01f;
   ExpectInvalidConfig(config);
+  config = PendulumConfig{};
+  config.drive_torque_amplitude_n_m = -0.01f;
+  ExpectInvalidConfig(config);
+  config = PendulumConfig{};
+  config.drive_torque_amplitude_n_m = kMaximumDriveTorque + 0.01f;
+  ExpectInvalidConfig(config);
+  config = PendulumConfig{};
+  config.drive_angular_frequency_rad_s = -0.01f;
+  ExpectInvalidConfig(config);
+  config = PendulumConfig{};
+  config.drive_angular_frequency_rad_s = kMaximumDriveAngularFrequency + 0.01f;
+  ExpectInvalidConfig(config);
 
   config = PendulumConfig{};
   config.rod_length_m = kMinimumRodLength;
@@ -364,6 +529,20 @@ void TestValidationNonFiniteAndDangerousInputs() {
   config.damping_enabled = true;
   config.damping_coefficient_n_m_s = kMaximumDamping;
   ExpectInvalidConfig(config);
+
+  config = PendulumConfig{};
+  config.rod_length_m = kMinimumRodLength;
+  config.rod_mass_kg = kMinimumMass;
+  config.counterweight_mass_kg = kMinimumMass;
+  config.counterweight_distance_m = kMinimumRodLength;
+  config.electric_field_enabled = false;
+  config.drive_torque_amplitude_n_m = 100.0f;
+  config.drive_angular_frequency_rad_s = kMaximumDriveAngularFrequency;
+  CHECK(GetPendulumConfigError(config) == nullptr);
+  config.drive_enabled = true;
+  ExpectInvalidConfig(config);
+  config.drive_torque_amplitude_n_m = 0.0f;
+  CHECK(GetPendulumConfigError(config) == nullptr);
 
   config = PendulumConfig{};
   const PendulumState valid_state = MakeInitialPendulumState(config);
@@ -395,6 +574,18 @@ void TestValidationNonFiniteAndDangerousInputs() {
   state = valid_state;
   CHECK(!StepPendulum(invalid_config, kPendulumPhysicsStep, &state));
   CHECK(state.time_seconds == valid_state.time_seconds);
+
+  config = PendulumConfig{};
+  config.initial_angle_degrees = 0.0f;
+  config.drive_enabled = true;
+  config.drive_torque_amplitude_n_m = 0.1f;
+  config.drive_angular_frequency_rad_s = 1.0f;
+  state = MakeInitialPendulumState(config);
+  CHECK(StepPendulum(config, 0.25f, &state));
+  state = MakeInitialPendulumState(config);
+  const PendulumState before_rejected_step = state;
+  CHECK(!StepPendulum(config, 0.2501f, &state));
+  CheckStateExactlyEqual(state, before_rejected_step);
 }
 
 void TestLongRunFiniteAndDeterministic() {
@@ -411,6 +602,9 @@ void TestLongRunFiniteAndDeterministic() {
   config.electric_field_angle_degrees = -73.0f;
   config.damping_enabled = true;
   config.damping_coefficient_n_m_s = 0.01f;
+  config.drive_enabled = true;
+  config.drive_torque_amplitude_n_m = 0.005f;
+  config.drive_angular_frequency_rad_s = 2.3f;
   CHECK(GetPendulumConfigError(config) == nullptr);
 
   PendulumState first = MakeInitialPendulumState(config);
@@ -444,6 +638,11 @@ int main() {
   const std::array tests = {
       NamedTest{"formula anchors and semi-implicit step",
                 TestFormulaAnchorsAndSemiImplicitStep},
+      NamedTest{"drive phase, power, and step sampling",
+                TestDrivePhasePowerAndStepSampling},
+      NamedTest{"disabled and zero drive preserve legacy trajectory",
+                TestDisabledAndZeroDrivePreserveLegacyTrajectory},
+      NamedTest{"resonant response", TestResonantResponse},
       NamedTest{"history lookup", TestHistoryLookup},
       NamedTest{"electric direction, charge, and counterweight position",
                 TestElectricDirectionChargeAndCounterweightPosition},

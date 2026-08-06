@@ -10,6 +10,10 @@ namespace {
 
 constexpr float kPendulumMaximumAnglePerStep = 0.25f;
 
+bool IsPendulumDriveActive(const PendulumConfig& config) {
+  return config.drive_enabled && config.drive_torque_amplitude_n_m > 0.0f;
+}
+
 float GetPendulumGravityTorqueScale(const PendulumConfig& config) {
   return config.gravity_m_s2 *
          (config.rod_mass_kg * config.rod_length_m * 0.5f +
@@ -69,9 +73,16 @@ PendulumDerived CalculatePendulumDerived(const PendulumConfig& config,
       config.damping_enabled
           ? -config.damping_coefficient_n_m_s * state.angular_velocity_rad_s
           : 0.0f;
-  derived.total_torque_n_m = derived.gravity_torque_n_m +
-                             derived.electric_torque_n_m +
-                             derived.damping_torque_n_m;
+  if (IsPendulumDriveActive(config)) {
+    derived.driving_torque_n_m =
+        config.drive_torque_amplitude_n_m *
+        std::cos(config.drive_angular_frequency_rad_s * state.time_seconds);
+    derived.driving_power_w =
+        derived.driving_torque_n_m * state.angular_velocity_rad_s;
+  }
+  derived.total_torque_n_m =
+      derived.gravity_torque_n_m + derived.electric_torque_n_m +
+      derived.damping_torque_n_m + derived.driving_torque_n_m;
   derived.angular_acceleration_rad_s2 =
       derived.total_torque_n_m / derived.moment_of_inertia_kg_m2;
 
@@ -89,11 +100,13 @@ PendulumDerived CalculatePendulumDerived(const PendulumConfig& config,
 }
 
 bool IsPendulumDerivedFinite(const PendulumDerived& derived) {
-  const std::array<float, 10> values = {
+  const std::array<float, 12> values = {
       derived.moment_of_inertia_kg_m2,
       derived.gravity_torque_n_m,
       derived.electric_torque_n_m,
       derived.damping_torque_n_m,
+      derived.driving_torque_n_m,
+      derived.driving_power_w,
       derived.total_torque_n_m,
       derived.angular_acceleration_rad_s2,
       derived.kinetic_energy_j,
@@ -167,7 +180,7 @@ const char* GetPendulumStateError(const PendulumConfig& config,
 }
 
 const char* GetPendulumConfigError(const PendulumConfig& config) {
-  const std::array<float, 11> values = {
+  const std::array<float, 13> values = {
       config.rod_length_m,
       config.rod_mass_kg,
       config.counterweight_mass_kg,
@@ -179,6 +192,8 @@ const char* GetPendulumConfigError(const PendulumConfig& config) {
       config.electric_field_strength_n_c,
       config.electric_field_angle_degrees,
       config.damping_coefficient_n_m_s,
+      config.drive_torque_amplitude_n_m,
+      config.drive_angular_frequency_rad_s,
   };
   if (!std::all_of(values.begin(), values.end(),
                    [](float value) { return std::isfinite(value); })) {
@@ -219,6 +234,12 @@ const char* GetPendulumConfigError(const PendulumConfig& config) {
       config.damping_coefficient_n_m_s > kMaximumDamping) {
     return "Rotational damping must be between 0 and 1000 N*m*s/rad.";
   }
+  if (config.drive_torque_amplitude_n_m < 0.0f ||
+      config.drive_torque_amplitude_n_m > kMaximumDriveTorque ||
+      config.drive_angular_frequency_rad_s < 0.0f ||
+      config.drive_angular_frequency_rad_s > kMaximumDriveAngularFrequency) {
+    return "Drive torque or angular frequency is outside the supported range.";
+  }
 
   const float moment_of_inertia = GetPendulumMomentOfInertia(config);
   const float restoring_torque = GetPendulumRestoringTorqueMagnitude(config);
@@ -240,7 +261,10 @@ const char* GetPendulumConfigError(const PendulumConfig& config) {
       restoring_torque / moment_of_inertia +
       (config.damping_enabled ? config.damping_coefficient_n_m_s *
                                     maximum_angular_speed / moment_of_inertia
-                              : 0.0f);
+                              : 0.0f) +
+      (IsPendulumDriveActive(config)
+           ? config.drive_torque_amplitude_n_m / moment_of_inertia
+           : 0.0f);
   if (!std::isfinite(maximum_angular_speed) ||
       !std::isfinite(maximum_angular_acceleration) ||
       maximum_angular_speed * kPendulumPhysicsStep >
@@ -248,6 +272,9 @@ const char* GetPendulumConfigError(const PendulumConfig& config) {
       maximum_angular_acceleration * kPendulumPhysicsStep *
               kPendulumPhysicsStep >
           kPendulumMaximumAnglePerStep ||
+      (IsPendulumDriveActive(config) &&
+       config.drive_angular_frequency_rad_s * kPendulumPhysicsStep >
+           kPendulumMaximumAnglePerStep) ||
       (config.damping_enabled && config.damping_coefficient_n_m_s *
                                          kPendulumPhysicsStep /
                                          moment_of_inertia >=
@@ -272,19 +299,27 @@ bool StepPendulum(const PendulumConfig& config, float delta_time,
       std::abs(state->angular_velocity_rad_s) * delta_time >
           kPendulumMaximumAnglePerStep ||
       std::abs(before.angular_acceleration_rad_s2) * delta_time * delta_time >
-          kPendulumMaximumAnglePerStep) {
+          kPendulumMaximumAnglePerStep ||
+      (IsPendulumDriveActive(config) &&
+       config.drive_angular_frequency_rad_s * delta_time >
+           kPendulumMaximumAnglePerStep)) {
     return false;
   }
 
-  state->angular_velocity_rad_s +=
+  PendulumState next = *state;
+  next.angular_velocity_rad_s +=
       before.angular_acceleration_rad_s2 * delta_time;
-  state->angle_radians = std::remainder(
-      state->angle_radians + state->angular_velocity_rad_s * delta_time,
+  next.angle_radians = std::remainder(
+      next.angle_radians + next.angular_velocity_rad_s * delta_time,
       2.0f * kPendulumPi);
-  state->time_seconds += delta_time;
-  state->angular_acceleration_rad_s2 =
-      CalculatePendulumDerived(config, *state).angular_acceleration_rad_s2;
-  return GetPendulumStateError(config, *state) == nullptr;
+  next.time_seconds += delta_time;
+  next.angular_acceleration_rad_s2 =
+      CalculatePendulumDerived(config, next).angular_acceleration_rad_s2;
+  if (GetPendulumStateError(config, next) != nullptr) {
+    return false;
+  }
+  *state = next;
+  return true;
 }
 
 }  // namespace tiny2d::sandbox

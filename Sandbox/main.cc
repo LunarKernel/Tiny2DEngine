@@ -76,11 +76,12 @@ ModelChoice ChooseModel(SDL_Renderer* renderer) {
     }
 
     ImGui::Spacing();
-    ImGui::TextUnformatted("V10 PivotLab: Charged Physical Pendulum");
+    ImGui::TextUnformatted("V14 Driven PivotLab: Forced Damped Pendulum");
     ImGui::TextWrapped(
-        "A movable charged mass on a physical pendulum: torque, damping, "
-        "period, and energy.");
-    if (ImGui::Button("Open V10 PivotLab", {panel_width, kModelButtonHeight})) {
+        "Extends V10 with a periodic torque, resonance preset, live drive "
+        "power, and the original no-drive behavior.");
+    if (ImGui::Button("Open V14 Driven PivotLab",
+                      {panel_width, kModelButtonHeight})) {
       choice = ModelChoice::kRotationPendulum;
     }
 
@@ -130,7 +131,7 @@ int main(int, char*[]) {
   }
 
   SDL_Window* window = SDL_CreateWindow(
-      "Tiny2D Engine V13", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+      "Tiny2D Engine V14", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
       kWindowWidth, kWindowHeight, SDL_WINDOW_SHOWN);
   if (window == nullptr) {
     ShowError("The application window could not be created.");
