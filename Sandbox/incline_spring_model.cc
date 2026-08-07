@@ -8,6 +8,8 @@
 #include <limits>
 #include <utility>
 
+#include "simulation_history.h"
+
 namespace tiny2d::sandbox::incline_spring {
 namespace {
 
@@ -58,7 +60,7 @@ Rectangle CreateBody(const BodyConfig& body_config,
 
 SimulationSnapshot MakeSnapshot(const std::vector<Rectangle>& bodies,
                                 const std::array<Vec2, 2>& previous_velocities,
-                                float time, float delta_time,
+                                double time, float delta_time,
                                 const SimulationConfig& config) {
   SimulationSnapshot snapshot;
   snapshot.time = time;
@@ -735,8 +737,12 @@ const char* Reset(const SimulationConfig& config, State& state) {
     new_state.bodies.push_back(CreateRamp(config));
   }
   const std::array<Vec2, 2> previous_velocities{};
-  new_state.history.push_back(
-      MakeSnapshot(new_state.bodies, previous_velocities, 0.0f, 0.0f, config));
+  if (!AppendHistorySample(&new_state.history,
+                           MakeSnapshot(new_state.bodies, previous_velocities,
+                                        0.0, 0.0f, config),
+                           &SimulationSnapshot::time)) {
+    return "The initial simulation snapshot is invalid.";
+  }
   state = std::move(new_state);
   return nullptr;
 }
@@ -753,6 +759,12 @@ const char* Step(State& state, float delta_time) {
   if (const char* error = GetNonFiniteStateError(state.bodies);
       error != nullptr) {
     return error;
+  }
+  const double next_time = state.time + static_cast<double>(delta_time);
+  if (!std::isfinite(state.time) || state.time < 0.0 ||
+      !std::isfinite(next_time) || next_time <= state.time ||
+      (!state.history.empty() && next_time <= state.history.back().time)) {
+    return "The incline simulation clock or history is invalid.";
   }
 
   std::array<Vec2, 2> previous_velocities{};
@@ -791,19 +803,23 @@ const char* Step(State& state, float delta_time) {
   }
   ConstrainBodiesToSurfaces(state.bodies, state.config);
 
-  state.time += delta_time;
-  state.history.push_back(MakeSnapshot(state.bodies, previous_velocities,
-                                       state.time, delta_time, state.config));
+  if (!AppendHistorySample(&state.history,
+                           MakeSnapshot(state.bodies, previous_velocities,
+                                        next_time, delta_time, state.config),
+                           &SimulationSnapshot::time)) {
+    return "The incline simulation history rejected its next snapshot.";
+  }
+  state.time = next_time;
   return nullptr;
 }
 
-const SimulationSnapshot* FindSnapshot(const State& state, float time) {
+const SimulationSnapshot* FindSnapshot(const State& state, double time) {
   if (state.history.empty() || !std::isfinite(time)) {
     return nullptr;
   }
   const auto next = std::lower_bound(
       state.history.begin(), state.history.end(), time,
-      [](const SimulationSnapshot& snapshot, float target_time) {
+      [](const SimulationSnapshot& snapshot, double target_time) {
         return snapshot.time < target_time;
       });
   if (next == state.history.begin()) {

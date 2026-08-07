@@ -55,6 +55,10 @@ bool Near(float actual, float expected, float tolerance = kTestTolerance) {
   return std::abs(actual - expected) <= tolerance;
 }
 
+bool NearTime(double actual, double expected, double tolerance = 0.000001) {
+  return std::abs(actual - expected) <= tolerance;
+}
+
 void ExpectInvalidConfig(const PendulumConfig& config) {
   CHECK(GetPendulumConfigError(config) != nullptr);
 }
@@ -121,7 +125,7 @@ void TestFormulaAnchorsAndSemiImplicitStep() {
   CHECK(StepPendulum(config, kStep, &state));
   CHECK(Near(state.angular_velocity_rad_s, 1.4666667f));
   CHECK(Near(state.angle_radians, 1.7174630f));
-  CHECK(Near(state.time_seconds, kStep));
+  CHECK(NearTime(state.time_seconds, kStep));
 }
 
 void TestDrivePhasePowerAndStepSampling() {
@@ -138,12 +142,12 @@ void TestDrivePhasePowerAndStepSampling() {
              derived.gravity_torque_n_m + derived.electric_torque_n_m +
                  derived.damping_torque_n_m + derived.driving_torque_n_m));
 
-  state.time_seconds = kPendulumPi * 0.25f;
+  state.time_seconds = static_cast<double>(kPendulumPi) * 0.25;
   derived = CalculatePendulumDerived(config, state);
   CHECK(Near(derived.driving_torque_n_m, 0.0f, 0.00001f));
   CHECK(Near(derived.driving_power_w, 0.0f, 0.00005f));
 
-  state.time_seconds = kPendulumPi * 0.5f;
+  state.time_seconds = static_cast<double>(kPendulumPi) * 0.5;
   derived = CalculatePendulumDerived(config, state);
   CHECK(Near(derived.driving_torque_n_m, -12.0f));
   CHECK(Near(derived.driving_power_w, -36.0f));
@@ -158,7 +162,7 @@ void TestDrivePhasePowerAndStepSampling() {
   CHECK(StepPendulum(config, kStep, &state));
   CHECK(Near(state.angular_velocity_rad_s, expected_velocity));
   CHECK(Near(state.angle_radians, expected_angle));
-  CHECK(Near(state.time_seconds, kStep));
+  CHECK(NearTime(state.time_seconds, kStep));
   CHECK(Near(
       state.angular_acceleration_rad_s2,
       CalculatePendulumDerived(config, state).angular_acceleration_rad_s2));
@@ -244,17 +248,17 @@ void TestResonantResponse() {
 
 void TestHistoryLookup() {
   std::vector<PendulumState> history(3);
-  history[0].time_seconds = 0.0f;
-  history[1].time_seconds = 1.0f;
-  history[2].time_seconds = 2.0f;
+  history[0].time_seconds = 0.0;
+  history[1].time_seconds = 1.0;
+  history[2].time_seconds = 2.0;
 
-  CHECK(FindPendulumState({}, 0.0f) == nullptr);
-  CHECK(FindPendulumState(history, std::numeric_limits<float>::quiet_NaN()) ==
+  CHECK(FindPendulumState({}, 0.0) == nullptr);
+  CHECK(FindPendulumState(history, std::numeric_limits<double>::quiet_NaN()) ==
         nullptr);
-  CHECK(FindPendulumState(history, -1.0f) == &history[0]);
-  CHECK(FindPendulumState(history, 0.5f) == &history[0]);
-  CHECK(FindPendulumState(history, 0.6f) == &history[1]);
-  CHECK(FindPendulumState(history, 3.0f) == &history[2]);
+  CHECK(FindPendulumState(history, -1.0) == &history[0]);
+  CHECK(FindPendulumState(history, 0.5) == &history[0]);
+  CHECK(FindPendulumState(history, 0.6) == &history[1]);
+  CHECK(FindPendulumState(history, 3.0) == &history[2]);
 }
 
 void TestElectricDirectionChargeAndCounterweightPosition() {
@@ -335,8 +339,8 @@ void TestSmallAnglePeriod() {
 
   PendulumState state = MakeTestState(config, 0.01f, 0.0f);
   float previous_angle = state.angle_radians;
-  float previous_time = state.time_seconds;
-  std::array<float, 2> crossings{};
+  double previous_time = state.time_seconds;
+  std::array<double, 2> crossings{};
   std::size_t crossing_count = 0;
   for (int step = 0; step < 2000 && crossing_count < crossings.size(); ++step) {
     CHECK(StepPendulum(config, kPendulumPhysicsStep, &state));
@@ -352,9 +356,9 @@ void TestSmallAnglePeriod() {
   }
 
   CHECK(crossing_count == crossings.size());
-  const float measured_period = crossings[1] - crossings[0];
-  CHECK(Near(measured_period, 2.1765592f, 0.002f));
-  CHECK(Near(measured_period, GetSmallAnglePeriod(config), 0.002f));
+  const double measured_period = crossings[1] - crossings[0];
+  CHECK(NearTime(measured_period, 2.1765592, 0.002));
+  CHECK(NearTime(measured_period, GetSmallAnglePeriod(config), 0.002));
 }
 
 void TestConservativeEnergyAndDampingLoss() {
@@ -546,11 +550,10 @@ void TestValidationNonFiniteAndDangerousInputs() {
 
   config = PendulumConfig{};
   const PendulumState valid_state = MakeInitialPendulumState(config);
-  constexpr std::array<float PendulumState::*, 4> state_fields = {
+  constexpr std::array<float PendulumState::*, 3> state_fields = {
       &PendulumState::angle_radians,
       &PendulumState::angular_velocity_rad_s,
       &PendulumState::angular_acceleration_rad_s2,
-      &PendulumState::time_seconds,
   };
   for (float invalid_value : invalid_values) {
     for (float PendulumState::* field : state_fields) {
@@ -558,6 +561,13 @@ void TestValidationNonFiniteAndDangerousInputs() {
       state.*field = invalid_value;
       CHECK(GetPendulumStateError(config, state) != nullptr);
     }
+  }
+  for (double invalid_value : {std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::infinity(),
+                               -std::numeric_limits<double>::infinity()}) {
+    PendulumState invalid_time_state = valid_state;
+    invalid_time_state.time_seconds = invalid_value;
+    CHECK(GetPendulumStateError(config, invalid_time_state) != nullptr);
   }
   PendulumState state = valid_state;
   state.angle_radians = std::numeric_limits<float>::quiet_NaN();
@@ -621,7 +631,18 @@ void TestLongRunFiniteAndDeterministic() {
              0.000001f));
   CHECK(Near(first.angular_acceleration_rad_s2,
              second.angular_acceleration_rad_s2, 0.000001f));
-  CHECK(Near(first.time_seconds, second.time_seconds, 0.000001f));
+  CHECK(NearTime(first.time_seconds, second.time_seconds));
+}
+
+void TestLargeSimulationTimeStillAdvances() {
+  const PendulumConfig config;
+  PendulumState state = MakeInitialPendulumState(config);
+  state.time_seconds = 1000000.0;
+  const double previous_time = state.time_seconds;
+  CHECK(StepPendulum(config, kPendulumPhysicsStep, &state));
+  CHECK(state.time_seconds > previous_time);
+  CHECK(NearTime(state.time_seconds - previous_time,
+                 static_cast<double>(kPendulumPhysicsStep), 1e-9));
 }
 
 using TestFunction = void (*)();
@@ -653,6 +674,8 @@ int main() {
                 TestValidationNonFiniteAndDangerousInputs},
       NamedTest{"long-run finite and deterministic",
                 TestLongRunFiniteAndDeterministic},
+      NamedTest{"large simulation time advances",
+                TestLargeSimulationTimeStillAdvances},
   };
 
   for (const NamedTest& test : tests) {

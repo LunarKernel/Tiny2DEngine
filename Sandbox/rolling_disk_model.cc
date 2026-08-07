@@ -408,7 +408,7 @@ SegmentResult IntegrateSegment(const RollingDiskConfig& config,
 
   if (!FitsFloat(next_velocity) || !FitsFloat(next_angular_velocity) ||
       !FitsFloat(next_distance) || !FitsFloat(next_angle) ||
-      !FitsFloat(next_time) || !FitsFloat(dissipated)) {
+      !std::isfinite(next_time) || !FitsFloat(dissipated)) {
     return {false, 0.0};
   }
 
@@ -416,7 +416,7 @@ SegmentResult IntegrateSegment(const RollingDiskConfig& config,
   state->angular_velocity_rad_s = static_cast<float>(next_angular_velocity);
   state->distance_down_ramp_m = static_cast<float>(next_distance);
   state->angle_radians = static_cast<float>(next_angle);
-  state->time_seconds = static_cast<float>(next_time);
+  state->time_seconds = next_time;
   state->dissipated_energy_j = static_cast<float>(dissipated);
   state->contact_mode =
       sliding ? RollingContactMode::kSliding : RollingContactMode::kRolling;
@@ -536,9 +536,10 @@ const char* GetRollingDiskStateError(const RollingDiskConfig& config,
   const std::array values = {
       state.distance_down_ramp_m, state.velocity_down_ramp_m_s,
       state.angle_radians,        state.angular_velocity_rad_s,
-      state.time_seconds,         state.dissipated_energy_j,
+      state.dissipated_energy_j,
   };
-  if (!std::all_of(values.begin(), values.end(), IsFinite)) {
+  if (!std::all_of(values.begin(), values.end(), IsFinite) ||
+      !std::isfinite(state.time_seconds)) {
     return "The rolling-disk state must contain only finite values.";
   }
   if (!IsKnownContactMode(state.contact_mode) || !IsKnownStatus(state.status)) {
@@ -546,7 +547,7 @@ const char* GetRollingDiskStateError(const RollingDiskConfig& config,
   }
   if (state.distance_down_ramp_m < -kPositionTolerance ||
       state.distance_down_ramp_m > config.ramp_length_m + kPositionTolerance ||
-      state.time_seconds < 0.0f || state.dissipated_energy_j < 0.0f) {
+      state.time_seconds < 0.0 || state.dissipated_energy_j < 0.0f) {
     return "Rolling-disk distance, time, or dissipated energy is invalid.";
   }
   if (state.status == RollingDiskStatus::kReachedTop &&
@@ -601,13 +602,13 @@ RollingDiskDerived CalculateRollingDiskDerived(const RollingDiskConfig& config,
 }
 
 const RollingDiskState* FindRollingDiskState(
-    const std::vector<RollingDiskState>& history, float time_seconds) {
+    const std::vector<RollingDiskState>& history, double time_seconds) {
   if (history.empty() || !std::isfinite(time_seconds)) {
     return nullptr;
   }
   const auto next =
       std::lower_bound(history.begin(), history.end(), time_seconds,
-                       [](const RollingDiskState& state, float target_time) {
+                       [](const RollingDiskState& state, double target_time) {
                          return state.time_seconds < target_time;
                        });
   if (next == history.begin()) {

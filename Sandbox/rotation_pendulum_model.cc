@@ -74,9 +74,11 @@ PendulumDerived CalculatePendulumDerived(const PendulumConfig& config,
           ? -config.damping_coefficient_n_m_s * state.angular_velocity_rad_s
           : 0.0f;
   if (IsPendulumDriveActive(config)) {
-    derived.driving_torque_n_m =
-        config.drive_torque_amplitude_n_m *
-        std::cos(config.drive_angular_frequency_rad_s * state.time_seconds);
+    const double drive_phase =
+        static_cast<double>(config.drive_angular_frequency_rad_s) *
+        state.time_seconds;
+    derived.driving_torque_n_m = config.drive_torque_amplitude_n_m *
+                                 static_cast<float>(std::cos(drive_phase));
     derived.driving_power_w =
         derived.driving_torque_n_m * state.angular_velocity_rad_s;
   }
@@ -129,13 +131,13 @@ PendulumState MakeInitialPendulumState(const PendulumConfig& config) {
 }
 
 const PendulumState* FindPendulumState(
-    const std::vector<PendulumState>& history, float time_seconds) {
+    const std::vector<PendulumState>& history, double time_seconds) {
   if (history.empty() || !std::isfinite(time_seconds)) {
     return nullptr;
   }
   const auto next =
       std::lower_bound(history.begin(), history.end(), time_seconds,
-                       [](const PendulumState& state, float target_time) {
+                       [](const PendulumState& state, double target_time) {
                          return state.time_seconds < target_time;
                        });
   if (next == history.begin()) {
@@ -153,17 +155,17 @@ const PendulumState* FindPendulumState(
 
 const char* GetPendulumStateError(const PendulumConfig& config,
                                   const PendulumState& state) {
-  const std::array<float, 4> values = {
+  const std::array<float, 3> values = {
       state.angle_radians,
       state.angular_velocity_rad_s,
       state.angular_acceleration_rad_s2,
-      state.time_seconds,
   };
   if (!std::all_of(values.begin(), values.end(),
-                   [](float value) { return std::isfinite(value); })) {
+                   [](float value) { return std::isfinite(value); }) ||
+      !std::isfinite(state.time_seconds)) {
     return "The pendulum state contains NaN or infinity.";
   }
-  if (state.time_seconds < 0.0f) {
+  if (state.time_seconds < 0.0) {
     return "The pendulum time cannot be negative.";
   }
   if (std::abs(state.angular_velocity_rad_s) * kPendulumPhysicsStep >
@@ -312,7 +314,7 @@ bool StepPendulum(const PendulumConfig& config, float delta_time,
   next.angle_radians = std::remainder(
       next.angle_radians + next.angular_velocity_rad_s * delta_time,
       2.0f * kPendulumPi);
-  next.time_seconds += delta_time;
+  next.time_seconds += static_cast<double>(delta_time);
   next.angular_acceleration_rad_s2 =
       CalculatePendulumDerived(config, next).angular_acceleration_rad_s2;
   if (GetPendulumStateError(config, next) != nullptr) {

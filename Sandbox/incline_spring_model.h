@@ -61,7 +61,7 @@ struct BodyTelemetry {
 struct SimulationSnapshot {
   // Engine simulation seconds. Convert with
   // GetRealSecondsPerSimulationSecond() for display.
-  float time{};
+  double time{};
   std::array<BodyTelemetry, 2> bodies{};
 };
 
@@ -70,9 +70,10 @@ struct State {
   // The first two entries are always bodies A and B. A static ramp, when
   // enabled, is the third entry.
   std::vector<Rectangle> bodies;
-  // ponytail: Keep one run in memory; cap only when long sessions require it.
+  // Snapshots are strictly ordered by engine simulation seconds.
   std::vector<SimulationSnapshot> history;
-  float time{};
+  // Engine simulation seconds. History lookup accepts finite double seconds.
+  double time{};
 };
 
 float GetRampAngle(const SimulationConfig& config);
@@ -113,14 +114,14 @@ const char* GetConfigError(const SimulationConfig& config);
 const char* Reset(const SimulationConfig& config, State& state);
 
 // Advances exactly delta_time engine seconds and records one snapshot.
-// delta_time must be finite and in (0, kPhysicsStep]. Engine validation
-// exceptions are intentionally allowed to propagate to the application
-// boundary.
+// delta_time must be finite and in (0, kPhysicsStep]. Engine validation throws
+// std::invalid_argument to the caller; the interactive simulation reports it
+// and returns to its setup screen.
 const char* Step(State& state, float delta_time);
 
 // Returns the nearest recorded snapshot, clamped to the recorded time range.
 // Returns nullptr for an empty history or a non-finite query.
-const SimulationSnapshot* FindSnapshot(const State& state, float time);
+const SimulationSnapshot* FindSnapshot(const State& state, double time);
 
 }  // namespace tiny2d::sandbox::incline_spring
 

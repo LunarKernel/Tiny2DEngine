@@ -54,7 +54,8 @@ struct RollingDiskState {
   float velocity_down_ramp_m_s{};
   float angle_radians{};
   float angular_velocity_rad_s{};
-  float time_seconds{};
+  // Elapsed simulation time in seconds. Must be finite and nonnegative.
+  double time_seconds{};
   float dissipated_energy_j{};
   RollingContactMode contact_mode{RollingContactMode::kRolling};
   RollingDiskStatus status{RollingDiskStatus::kActive};
@@ -91,11 +92,11 @@ RollingDiskState MakeInitialRollingDiskState(const RollingDiskConfig& config);
 RollingDiskDerived CalculateRollingDiskDerived(const RollingDiskConfig& config,
                                                const RollingDiskState& state);
 
-// Returns the nearest sample; queries outside the recorded interval clamp to
-// its first or last sample. Returns nullptr for empty history or non-finite
-// query time.
+// History times must be strictly increasing seconds. Returns the nearest
+// sample; queries outside the recorded interval clamp to its first or last
+// sample. Returns nullptr for empty history or non-finite query time.
 const RollingDiskState* FindRollingDiskState(
-    const std::vector<RollingDiskState>& history, float time_seconds);
+    const std::vector<RollingDiskState>& history, double time_seconds);
 
 // Advances an active, surface-bound disk by a positive finite time step.
 // Returns false for invalid input, an airborne disk, or an already-finished

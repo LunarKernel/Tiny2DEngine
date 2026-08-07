@@ -3,9 +3,12 @@
 #include <iostream>
 #include <limits>
 #include <random>
+#include <stdexcept>
 #include <string>
 
+#include "fixed_step_clock.h"
 #include "incline_spring_model.h"
+#include "simulation_history.h"
 
 namespace tiny2d::sandbox::incline_spring {
 namespace {
@@ -27,6 +30,47 @@ constexpr float kTestTolerance = 0.001f;
 
 bool Near(float actual, float expected, float tolerance = kTestTolerance) {
   return std::abs(actual - expected) <= tolerance;
+}
+
+bool NearTime(double actual, double expected, double tolerance = 0.000001) {
+  return std::abs(actual - expected) <= tolerance;
+}
+
+struct HistorySample {
+  double time;
+  int id;
+};
+
+void TestFixedStepClock() {
+  tiny2d::sandbox::FixedStepClock exact_clock(8.0, 0);
+  exact_clock.Accumulate(1, 1.0);
+  CHECK(exact_clock.HasStep(0.125));
+  exact_clock.ConsumeStep(0.0625);
+  CHECK(exact_clock.HasStep(0.0625));
+  CHECK(!exact_clock.HasStep(0.125));
+  exact_clock.ConsumeStep(0.0625);
+  CHECK(!exact_clock.HasStep(0.0625));
+
+  tiny2d::sandbox::FixedStepClock clamped_clock(8.0, 0);
+  clamped_clock.Accumulate(100, 0.25);
+  clamped_clock.ConsumeStep(0.125);
+  clamped_clock.ConsumeStep(0.125);
+  CHECK(!clamped_clock.HasStep(0.125));
+
+  clamped_clock.Accumulate(101, 1.0);
+  CHECK(clamped_clock.HasStep(0.125));
+  clamped_clock.Reset(200);
+  CHECK(!clamped_clock.HasStep(0.125));
+  clamped_clock.Accumulate(201, 1.0);
+  CHECK(clamped_clock.HasStep(0.125));
+  clamped_clock.DiscardPendingSteps();
+  CHECK(!clamped_clock.HasStep(0.125));
+
+  tiny2d::sandbox::FixedStepClock backward_clock(10.0, 100);
+  backward_clock.Accumulate(90, 1.0);
+  CHECK(!backward_clock.HasStep(0.1));
+  backward_clock.Accumulate(91, 1.0);
+  CHECK(backward_clock.HasStep(0.1));
 }
 
 void ExpectInvalidConfig(const SimulationConfig& config) {
@@ -89,7 +133,7 @@ void TestStateLifecycleContracts() {
   CHECK(Reset(config, state) == nullptr);
   CHECK(state.bodies.size() == 3);
   CHECK(state.history.size() == 1);
-  CHECK(state.time == 0.0f);
+  CHECK(state.time == 0.0);
 
   const float initial_position_x = state.bodies[0].position.x;
   SimulationConfig invalid_config = config;
@@ -102,9 +146,29 @@ void TestStateLifecycleContracts() {
   CHECK(Step(state, 0.0f) != nullptr);
   CHECK(state.history.size() == 1);
   CHECK(Step(state, kPhysicsStep) == nullptr);
-  CHECK(Near(state.time, kPhysicsStep));
+  CHECK(NearTime(state.time, kPhysicsStep));
   CHECK(state.history.size() == 2);
   CHECK(FindSnapshot(state, state.time) == &state.history.back());
+}
+
+void TestEngineValidationExceptionsPropagate() {
+  SimulationConfig config;
+  config.ramp_enabled = false;
+  config.spring_enabled = false;
+  State state;
+  CHECK(Reset(config, state) == nullptr);
+
+  state.config.electric_field_enabled = true;
+  state.config.electric_field_strength_n_per_c =
+      std::numeric_limits<float>::max();
+  state.config.body_a_engine_mass = std::numeric_limits<float>::max();
+  bool caught = false;
+  try {
+    static_cast<void>(Step(state, kPhysicsStep));
+  } catch (const std::invalid_argument&) {
+    caught = true;
+  }
+  CHECK(caught);
 }
 
 void TestEveryFloatFieldRejectsNonFiniteValues() {
@@ -420,15 +484,15 @@ void TestSnapshotLookupAndAcceleration() {
   State lookup_state;
   CHECK(FindSnapshot(lookup_state, 0.0f) == nullptr);
   lookup_state.history.resize(3);
-  lookup_state.history[0].time = 0.0f;
-  lookup_state.history[1].time = 1.0f;
-  lookup_state.history[2].time = 2.0f;
-  CHECK(FindSnapshot(lookup_state, -1.0f) == &lookup_state.history[0]);
-  CHECK(FindSnapshot(lookup_state, 0.0f) == &lookup_state.history[0]);
-  CHECK(FindSnapshot(lookup_state, 0.5f) == &lookup_state.history[0]);
-  CHECK(FindSnapshot(lookup_state, 0.51f) == &lookup_state.history[1]);
-  CHECK(FindSnapshot(lookup_state, 3.0f) == &lookup_state.history[2]);
-  CHECK(FindSnapshot(lookup_state, std::numeric_limits<float>::quiet_NaN()) ==
+  lookup_state.history[0].time = 0.0;
+  lookup_state.history[1].time = 1.0;
+  lookup_state.history[2].time = 2.0;
+  CHECK(FindSnapshot(lookup_state, -1.0) == &lookup_state.history[0]);
+  CHECK(FindSnapshot(lookup_state, 0.0) == &lookup_state.history[0]);
+  CHECK(FindSnapshot(lookup_state, 0.5) == &lookup_state.history[0]);
+  CHECK(FindSnapshot(lookup_state, 0.51) == &lookup_state.history[1]);
+  CHECK(FindSnapshot(lookup_state, 3.0) == &lookup_state.history[2]);
+  CHECK(FindSnapshot(lookup_state, std::numeric_limits<double>::quiet_NaN()) ==
         nullptr);
 
   SimulationConfig config;
@@ -451,7 +515,79 @@ void TestSnapshotLookupAndAcceleration() {
   CHECK(
       Near(stepped_snapshot.bodies[0].acceleration.y,
            (state.bodies[0].velocity.y - previous_velocity.y) / kPhysicsStep));
-  CHECK(Near(stepped_snapshot.time, state.time));
+  CHECK(NearTime(stepped_snapshot.time, state.time));
+}
+
+void TestBoundedSimulationHistory() {
+  std::vector<HistorySample> history{{0.0, 0}};
+  const std::vector<HistorySample> original = history;
+  CHECK(!tiny2d::sandbox::AppendHistorySample(
+      static_cast<std::vector<HistorySample>*>(nullptr), {1.0, 1},
+      &HistorySample::time));
+  CHECK(!tiny2d::sandbox::AppendHistorySample(
+      &history, {1.0, 1}, static_cast<double HistorySample::*>(nullptr)));
+  for (double invalid_time : {std::numeric_limits<double>::quiet_NaN(),
+                              std::numeric_limits<double>::infinity(),
+                              -std::numeric_limits<double>::infinity()}) {
+    CHECK(!tiny2d::sandbox::AppendHistorySample(&history, {invalid_time, 1},
+                                                &HistorySample::time));
+  }
+  CHECK(!tiny2d::sandbox::AppendHistorySample(&history, {0.0, 1},
+                                              &HistorySample::time));
+  CHECK(!tiny2d::sandbox::AppendHistorySample(&history, {-1.0, 1},
+                                              &HistorySample::time));
+  CHECK(history.size() == original.size());
+  CHECK(history.front().time == original.front().time);
+  CHECK(history.front().id == original.front().id);
+
+  history.clear();
+  history.reserve(tiny2d::sandbox::kMaxSimulationHistorySamples);
+  for (std::size_t index = 0;
+       index < tiny2d::sandbox::kMaxSimulationHistorySamples; ++index) {
+    history.push_back({static_cast<double>(index), static_cast<int>(index)});
+  }
+  CHECK(tiny2d::sandbox::AppendHistorySample(
+      &history,
+      {static_cast<double>(tiny2d::sandbox::kMaxSimulationHistorySamples),
+       static_cast<int>(tiny2d::sandbox::kMaxSimulationHistorySamples)},
+      &HistorySample::time));
+  CHECK(history.size() ==
+        tiny2d::sandbox::kMaxSimulationHistorySamples / 2 + 2);
+  for (std::size_t index = 0;
+       index < tiny2d::sandbox::kMaxSimulationHistorySamples / 2; ++index) {
+    CHECK(history[index].id == static_cast<int>(index * 2));
+  }
+  CHECK(history[tiny2d::sandbox::kMaxSimulationHistorySamples / 2].id ==
+        static_cast<int>(tiny2d::sandbox::kMaxSimulationHistorySamples - 1));
+  CHECK(history.back().id ==
+        static_cast<int>(tiny2d::sandbox::kMaxSimulationHistorySamples));
+
+  int next_id = history.back().id + 1;
+  constexpr int kAdditionalCompactions = 3;
+  const std::size_t append_count =
+      kAdditionalCompactions * tiny2d::sandbox::kMaxSimulationHistorySamples;
+  for (std::size_t index = 0; index < append_count; ++index) {
+    CHECK(tiny2d::sandbox::AppendHistorySample(
+        &history, {static_cast<double>(next_id), next_id},
+        &HistorySample::time));
+    ++next_id;
+    CHECK(history.size() <= tiny2d::sandbox::kMaxSimulationHistorySamples);
+  }
+  CHECK(history.front().id == 0);
+  CHECK(history.back().id == next_id - 1);
+  for (std::size_t index = 1; index < history.size(); ++index) {
+    CHECK(history[index - 1].time < history[index].time);
+  }
+}
+
+void TestLargeSimulationTimeStillAdvances() {
+  State state;
+  CHECK(Reset(SimulationConfig{}, state) == nullptr);
+  state.time = 1000000.0;
+  const double previous_time = state.time;
+  CHECK(Step(state, kPhysicsStep) == nullptr);
+  CHECK(state.time > previous_time);
+  CHECK(state.history.back().time == state.time);
 }
 
 void TestSignedTelemetry() {
@@ -641,7 +777,7 @@ void TestDefaultScenarioLongRunAndDeterminism() {
     CHECK(Step(replay, kPhysicsStep) == nullptr);
   }
   CHECK(replay.bodies.size() == second.bodies.size());
-  CHECK(Near(replay.time, second.time));
+  CHECK(NearTime(replay.time, second.time));
   CHECK(replay.history.size() == second.history.size());
   for (std::size_t i = 0; i < replay.bodies.size(); ++i) {
     CHECK(Near(replay.bodies[i].position.x, second.bodies[i].position.x));
@@ -706,9 +842,12 @@ struct NamedTest {
 int RunTests() {
   std::cout << std::unitbuf;
   const std::array tests = {
+      NamedTest{"fixed-step clock", TestFixedStepClock},
       NamedTest{"default and feature configurations",
                 TestDefaultAndFeatureConfigurations},
       NamedTest{"state lifecycle contracts", TestStateLifecycleContracts},
+      NamedTest{"engine validation exceptions propagate",
+                TestEngineValidationExceptionsPropagate},
       NamedTest{"all float fields reject NaN and infinity",
                 TestEveryFloatFieldRejectsNonFiniteValues},
       NamedTest{"invalid ranges and degenerate inputs",
@@ -725,6 +864,9 @@ int RunTests() {
       NamedTest{"body creation and clamping", TestBodyCreationAndClamping},
       NamedTest{"snapshot lookup and acceleration",
                 TestSnapshotLookupAndAcceleration},
+      NamedTest{"bounded simulation history", TestBoundedSimulationHistory},
+      NamedTest{"large simulation time advances",
+                TestLargeSimulationTimeStillAdvances},
       NamedTest{"signed telemetry", TestSignedTelemetry},
       NamedTest{"junction transitions", TestJunctionTransitionsPreserveSpeed},
       NamedTest{"surface constraint",

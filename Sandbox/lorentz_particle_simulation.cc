@@ -8,7 +8,10 @@
 #include <cstdio>
 #include <vector>
 
+#include "fixed_step_clock.h"
 #include "lorentz_particle_model.h"
+#include "sim_ui.h"
+#include "simulation_history.h"
 #include "simulations.h"
 
 namespace {
@@ -16,37 +19,15 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kDegreesToRadians = kPi / 180.0;
 constexpr double kMaximumFrameTime = 0.25;
+constexpr float kControlStart = 310.0f;
+constexpr float kSliderWidth = 300.0f;
+constexpr float kInputWidth = 110.0f;
 
 enum class SetupAction {
   kNone,
   kStart,
   kBack,
 };
-
-bool SliderInputDouble(const char* label, double* value, double minimum,
-                       double maximum, const char* format,
-                       ImGuiSliderFlags flags = ImGuiSliderFlags_None) {
-  constexpr float kControlStart = 310.0f;
-  constexpr float kSliderWidth = 300.0f;
-  constexpr float kInputWidth = 110.0f;
-
-  ImGui::PushID(label);
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted(label);
-  ImGui::SameLine(kControlStart);
-  ImGui::SetNextItemWidth(kSliderWidth);
-  bool changed = ImGui::SliderScalar("##slider", ImGuiDataType_Double, value,
-                                     &minimum, &maximum, format,
-                                     flags | ImGuiSliderFlags_AlwaysClamp);
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(kInputWidth);
-  changed |= ImGui::InputDouble("##input", value, 0.0, 0.0, format);
-  if (std::isfinite(*value)) {
-    *value = std::clamp(*value, minimum, maximum);
-  }
-  ImGui::PopID();
-  return changed;
-}
 
 const char* GetStatusLabel(tiny2d::sandbox::LorentzParticleStatus status) {
   using tiny2d::sandbox::LorentzParticleStatus;
@@ -86,21 +67,27 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::LorentzParticleConfig* config) {
   ImGui::Spacing();
   ImGui::TextUnformatted("Particle and initial state");
   ImGui::Separator();
-  SliderInputDouble("Mass m (kg)", &config->mass_kg, 0.01, 1000.0, "%.6g",
-                    ImGuiSliderFlags_Logarithmic);
-  SliderInputDouble("Charge q (C)", &config->charge_c, -1000.0, 1000.0,
-                    "%+.6g");
-  SliderInputDouble("Initial X (m)", &config->initial_x_m,
-                    tiny2d::sandbox::kLorentzMinimumX,
-                    tiny2d::sandbox::kLorentzMaximumX, "%+.3f");
-  SliderInputDouble("Initial Y (m)", &config->initial_y_m,
-                    tiny2d::sandbox::kLorentzMinimumY,
-                    tiny2d::sandbox::kLorentzMaximumY, "%+.3f");
-  SliderInputDouble("Initial speed (m/s)", &config->initial_speed_m_s, 0.0,
-                    100.0, "%.4g");
-  SliderInputDouble("Velocity angle from +X, CCW (degrees)",
-                    &config->initial_velocity_angle_degrees, -180.0, 180.0,
-                    "%+.2f");
+  tiny2d::sandbox::ui::SliderInputDouble(
+      "Mass m (kg)", &config->mass_kg, 0.01, 1000.0, "%.6g", kControlStart,
+      kSliderWidth, kInputWidth, ImGuiSliderFlags_Logarithmic);
+  tiny2d::sandbox::ui::SliderInputDouble(
+      "Charge q (C)", &config->charge_c, -1000.0, 1000.0, "%+.6g",
+      kControlStart, kSliderWidth, kInputWidth);
+  tiny2d::sandbox::ui::SliderInputDouble(
+      "Initial X (m)", &config->initial_x_m, tiny2d::sandbox::kLorentzMinimumX,
+      tiny2d::sandbox::kLorentzMaximumX, "%+.3f", kControlStart, kSliderWidth,
+      kInputWidth);
+  tiny2d::sandbox::ui::SliderInputDouble(
+      "Initial Y (m)", &config->initial_y_m, tiny2d::sandbox::kLorentzMinimumY,
+      tiny2d::sandbox::kLorentzMaximumY, "%+.3f", kControlStart, kSliderWidth,
+      kInputWidth);
+  tiny2d::sandbox::ui::SliderInputDouble(
+      "Initial speed (m/s)", &config->initial_speed_m_s, 0.0, 100.0, "%.4g",
+      kControlStart, kSliderWidth, kInputWidth);
+  tiny2d::sandbox::ui::SliderInputDouble(
+      "Velocity angle from +X, CCW (degrees)",
+      &config->initial_velocity_angle_degrees, -180.0, 180.0, "%+.2f",
+      kControlStart, kSliderWidth, kInputWidth);
 
   ImGui::Spacing();
   ImGui::TextUnformatted("Uniform fields");
@@ -108,24 +95,26 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::LorentzParticleConfig* config) {
   ImGui::Checkbox("Enable uniform electric field",
                   &config->electric_field_enabled);
   ImGui::BeginDisabled(!config->electric_field_enabled);
-  SliderInputDouble("Electric field E (N/C)",
-                    &config->electric_field_strength_n_c, 0.0, 1000000.0,
-                    "%.6g", ImGuiSliderFlags_Logarithmic);
-  SliderInputDouble("E angle from +X, CCW (degrees)",
-                    &config->electric_field_angle_degrees, -180.0, 180.0,
-                    "%+.2f");
+  tiny2d::sandbox::ui::SliderInputDouble(
+      "Electric field E (N/C)", &config->electric_field_strength_n_c, 0.0,
+      1000000.0, "%.6g", kControlStart, kSliderWidth, kInputWidth,
+      ImGuiSliderFlags_Logarithmic);
+  tiny2d::sandbox::ui::SliderInputDouble(
+      "E angle from +X, CCW (degrees)", &config->electric_field_angle_degrees,
+      -180.0, 180.0, "%+.2f", kControlStart, kSliderWidth, kInputWidth);
   ImGui::EndDisabled();
   ImGui::Checkbox("Enable uniform perpendicular magnetic field",
                   &config->magnetic_field_enabled);
   ImGui::BeginDisabled(!config->magnetic_field_enabled);
-  SliderInputDouble("Signed Bz (+Z out / -Z in) (T)",
-                    &config->magnetic_field_z_t, -100.0, 100.0, "%+.6g");
+  tiny2d::sandbox::ui::SliderInputDouble(
+      "Signed Bz (+Z out / -Z in) (T)", &config->magnetic_field_z_t, -100.0,
+      100.0, "%+.6g", kControlStart, kSliderWidth, kInputWidth);
   ImGui::EndDisabled();
   ImGui::Checkbox("Enable uniform gravity toward -Y", &config->gravity_enabled);
   ImGui::BeginDisabled(!config->gravity_enabled);
-  SliderInputDouble("Gravity g (m/s^2)",
-                    &config->gravitational_acceleration_m_s2, 0.0, 100.0,
-                    "%.6g");
+  tiny2d::sandbox::ui::SliderInputDouble(
+      "Gravity g (m/s^2)", &config->gravitational_acceleration_m_s2, 0.0, 100.0,
+      "%.6g", kControlStart, kSliderWidth, kInputWidth);
   ImGui::EndDisabled();
 
   const char* error = tiny2d::sandbox::GetLorentzParticleConfigError(*config);
@@ -166,31 +155,6 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::LorentzParticleConfig* config) {
 
   ImGui::End();
   return action;
-}
-
-void DrawArrow(ImDrawList* draw_list, ImVec2 center, ImVec2 direction,
-               float length, ImU32 color) {
-  const float direction_length = std::hypot(direction.x, direction.y);
-  if (direction_length <= 0.0f) {
-    return;
-  }
-  direction.x /= direction_length;
-  direction.y /= direction_length;
-  const ImVec2 start{center.x - direction.x * length * 0.5f,
-                     center.y - direction.y * length * 0.5f};
-  const ImVec2 end{center.x + direction.x * length * 0.5f,
-                   center.y + direction.y * length * 0.5f};
-  draw_list->AddLine(start, end, color, 3.0f);
-  const ImVec2 normal{-direction.y, direction.x};
-  constexpr float kHeadLength = 13.0f;
-  constexpr float kHeadWidth = 7.0f;
-  draw_list->AddTriangleFilled(
-      end,
-      {end.x - direction.x * kHeadLength + normal.x * kHeadWidth,
-       end.y - direction.y * kHeadLength + normal.y * kHeadWidth},
-      {end.x - direction.x * kHeadLength - normal.x * kHeadWidth,
-       end.y - direction.y * kHeadLength - normal.y * kHeadWidth},
-      color);
 }
 
 struct SceneLayout {
@@ -316,8 +280,9 @@ void DrawScene(
   const ImVec2 velocity_direction{
       static_cast<float>(displayed_state.velocity_x_m_s),
       -static_cast<float>(displayed_state.velocity_y_m_s)};
-  DrawArrow(draw_list, particle, velocity_direction, 72.0f,
-            IM_COL32(100, 205, 245, 255));
+  tiny2d::sandbox::ui::DrawCenteredArrow(draw_list, particle,
+                                         velocity_direction, 72.0f,
+                                         IM_COL32(100, 205, 245, 255));
   char particle_label[96];
   std::snprintf(particle_label, sizeof(particle_label),
                 "m=%.3g kg, q=%+.3g C\nv=%.4g m/s", config.mass_kg,
@@ -333,8 +298,8 @@ void DrawScene(
     const ImVec2 direction{static_cast<float>(std::cos(angle)),
                            -static_cast<float>(std::sin(angle))};
     const ImVec2 arrow_center{layout.right - 205.0f, layout.top - 44.0f};
-    DrawArrow(draw_list, arrow_center, direction, 72.0f,
-              IM_COL32(100, 225, 150, 255));
+    tiny2d::sandbox::ui::DrawCenteredArrow(draw_list, arrow_center, direction,
+                                           72.0f, IM_COL32(100, 225, 150, 255));
     char label[96];
     std::snprintf(label, sizeof(label), "E=%.4g N/C, %.2f deg CCW",
                   config.electric_field_strength_n_c,
@@ -355,8 +320,9 @@ void DrawScene(
 
   if (config.gravity_enabled) {
     const ImVec2 gravity_center{layout.center.x - 160.0f, layout.top - 44.0f};
-    DrawArrow(draw_list, gravity_center, {0.0f, 1.0f}, 72.0f,
-              IM_COL32(245, 190, 80, 255));
+    tiny2d::sandbox::ui::DrawCenteredArrow(draw_list, gravity_center,
+                                           {0.0f, 1.0f}, 72.0f,
+                                           IM_COL32(245, 190, 80, 255));
     char label[72];
     std::snprintf(label, sizeof(label), "g=%.4g m/s^2 toward -Y",
                   config.gravitational_acceleration_m_s2);
@@ -504,15 +470,6 @@ bool DrawMonitor(
   return stop;
 }
 
-void RecordState(const tiny2d::sandbox::LorentzParticleState& state,
-                 std::vector<tiny2d::sandbox::LorentzParticleState>* history) {
-  if (!history->empty() && state.time_seconds <= history->back().time_seconds) {
-    history->back() = state;
-  } else {
-    history->push_back(state);
-  }
-}
-
 }  // namespace
 
 namespace tiny2d::sandbox {
@@ -524,17 +481,14 @@ SimulationResult RunLorentzParticleSimulation(SDL_Renderer* renderer) {
 
   LorentzParticleConfig config = MakeGravitoOrbitPreset();
   LorentzParticleState state = MakeInitialLorentzParticleState(config);
-  // ponytail: Keep one laboratory run in memory; cap it only if long-running
-  // sessions become a demonstrated use case.
   std::vector<LorentzParticleState> history;
   bool simulation_started = false;
   bool paused = false;
   bool follow_live = true;
   double inspect_time = 0.0;
   const char* runtime_error = nullptr;
-  double accumulated_time = 0.0;
-  const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
-  Uint64 previous_time = SDL_GetPerformanceCounter();
+  FixedStepClock clock(static_cast<double>(SDL_GetPerformanceFrequency()),
+                       SDL_GetPerformanceCounter());
 
   while (true) {
     bool return_requested = false;
@@ -559,41 +513,49 @@ SimulationResult RunLorentzParticleSimulation(SDL_Renderer* renderer) {
 
     const Uint64 current_time = SDL_GetPerformanceCounter();
     if (!return_requested && !simulation_started) {
-      previous_time = current_time;
-      accumulated_time = 0.0;
+      clock.Reset(current_time);
       const SetupAction action = DrawSetupScreen(&config);
       if (action == SetupAction::kBack) {
         return_requested = true;
       } else if (action == SetupAction::kStart) {
         state = MakeInitialLorentzParticleState(config);
         history.clear();
-        history.push_back(state);
+        const bool recorded = AppendHistorySample(
+            &history, state, &LorentzParticleState::time_seconds);
         simulation_started = true;
-        paused = state.status != LorentzParticleStatus::kActive;
+        paused = !recorded || state.status != LorentzParticleStatus::kActive;
         follow_live = true;
         inspect_time = 0.0;
         runtime_error =
-            state.status == LorentzParticleStatus::kOutOfBounds
+            !recorded ? "The particle model produced an invalid history time."
+            : state.status == LorentzParticleStatus::kOutOfBounds
                 ? "The particle starts outside the 20 m x 12 m domain."
                 : nullptr;
-        previous_time = current_time;
+        clock.Reset(current_time);
       }
     } else if (simulation_started) {
       if (!return_requested && !paused && runtime_error == nullptr &&
           state.status == LorentzParticleStatus::kActive) {
-        const double frame_time = std::min(
-            static_cast<double>(current_time - previous_time) / frequency,
-            kMaximumFrameTime);
-        previous_time = current_time;
-        accumulated_time += frame_time;
-        while (accumulated_time >= kLorentzPhysicsStep) {
+        clock.Accumulate(current_time, kMaximumFrameTime);
+        while (clock.HasStep(kLorentzPhysicsStep)) {
           const bool stepped =
               StepLorentzParticle(config, kLorentzPhysicsStep, &state);
           if (!stepped) {
             if (state.status == LorentzParticleStatus::kOutOfBounds) {
-              RecordState(state, &history);
+              bool recorded = false;
+              if (!history.empty() &&
+                  state.time_seconds == history.back().time_seconds) {
+                history.back() = state;
+                recorded = true;
+              } else {
+                recorded = AppendHistorySample(
+                    &history, state, &LorentzParticleState::time_seconds);
+              }
               runtime_error =
-                  "The particle left the 20 m x 12 m simulation domain.";
+                  recorded
+                      ? "The particle left the 20 m x 12 m simulation domain."
+                      : "The particle model produced a non-increasing history "
+                        "time.";
             } else {
               runtime_error = GetLorentzParticleStateError(config, state);
             }
@@ -602,22 +564,28 @@ SimulationResult RunLorentzParticleSimulation(SDL_Renderer* renderer) {
                   "The fixed-step Lorentz model rejected this state.";
             }
             paused = true;
-            accumulated_time = 0.0;
+            clock.DiscardPendingSteps();
             break;
           }
-          RecordState(state, &history);
-          accumulated_time -= kLorentzPhysicsStep;
+          if (!AppendHistorySample(&history, state,
+                                   &LorentzParticleState::time_seconds)) {
+            runtime_error =
+                "The particle model produced a non-increasing history time.";
+            paused = true;
+            clock.DiscardPendingSteps();
+            break;
+          }
+          clock.ConsumeStep(kLorentzPhysicsStep);
           if (state.status == LorentzParticleStatus::kOutOfBounds) {
             runtime_error =
                 "The particle left the 20 m x 12 m simulation domain.";
             paused = true;
-            accumulated_time = 0.0;
+            clock.DiscardPendingSteps();
             break;
           }
         }
       } else {
-        previous_time = current_time;
-        accumulated_time = 0.0;
+        clock.Reset(current_time);
       }
 
       if (!return_requested &&

@@ -8,7 +8,10 @@
 #include <cstdio>
 #include <vector>
 
+#include "fixed_step_clock.h"
 #include "rolling_disk_model.h"
+#include "sim_ui.h"
+#include "simulation_history.h"
 #include "simulations.h"
 
 namespace {
@@ -17,6 +20,9 @@ constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDegreesToRadians = kPi / 180.0f;
 constexpr float kRadiansToDegrees = 180.0f / kPi;
 constexpr float kPhysicsStep = 1.0f / 240.0f;
+constexpr float kControlStart = 310.0f;
+constexpr float kSliderWidth = 300.0f;
+constexpr float kInputWidth = 110.0f;
 constexpr double kMaximumFrameTime = 0.25;
 
 enum class SetupAction {
@@ -24,30 +30,6 @@ enum class SetupAction {
   kStart,
   kBack,
 };
-
-bool SliderInputFloat(const char* label, float* value, float minimum,
-                      float maximum, const char* format,
-                      ImGuiSliderFlags flags = ImGuiSliderFlags_None) {
-  constexpr float kControlStart = 310.0f;
-  constexpr float kSliderWidth = 300.0f;
-  constexpr float kInputWidth = 110.0f;
-
-  ImGui::PushID(label);
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted(label);
-  ImGui::SameLine(kControlStart);
-  ImGui::SetNextItemWidth(kSliderWidth);
-  bool changed = ImGui::SliderFloat("##slider", value, minimum, maximum, format,
-                                    flags | ImGuiSliderFlags_AlwaysClamp);
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(kInputWidth);
-  changed |= ImGui::InputFloat("##input", value, 0.0f, 0.0f, format);
-  if (std::isfinite(*value)) {
-    *value = std::clamp(*value, minimum, maximum);
-  }
-  ImGui::PopID();
-  return changed;
-}
 
 const char* GetContactModeLabel(
     tiny2d::sandbox::RollingContactMode contact_mode) {
@@ -91,10 +73,12 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::RollingDiskConfig* config) {
   ImGui::Spacing();
   ImGui::TextUnformatted("Ramp and rolling body");
   ImGui::Separator();
-  SliderInputFloat("Ramp length L (m)", &config->ramp_length_m, 1.0f, 100.0f,
-                   "%.3f", ImGuiSliderFlags_Logarithmic);
-  SliderInputFloat("Ramp angle i (degrees)", &config->ramp_angle_degrees, 1.0f,
-                   80.0f, "%.2f");
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "Ramp length L (m)", &config->ramp_length_m, 1.0f, 100.0f, "%.3f",
+      kControlStart, kSliderWidth, kInputWidth, ImGuiSliderFlags_Logarithmic);
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "Ramp angle i (degrees)", &config->ramp_angle_degrees, 1.0f, 80.0f,
+      "%.2f", kControlStart, kSliderWidth, kInputWidth);
 
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("Rolling body");
@@ -108,30 +92,37 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::RollingDiskConfig* config) {
     config->kind = RollingDiskKind::kHoop;
   }
 
-  SliderInputFloat("Mass m (kg)", &config->mass_kg, 0.01f, 1000.0f, "%.4g",
-                   ImGuiSliderFlags_Logarithmic);
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "Mass m (kg)", &config->mass_kg, 0.01f, 1000.0f, "%.4g", kControlStart,
+      kSliderWidth, kInputWidth, ImGuiSliderFlags_Logarithmic);
   const float maximum_radius =
       std::max(0.02f, std::min(2.0f, config->ramp_length_m * 0.45f));
-  SliderInputFloat("Radius R (m)", &config->radius_m, 0.02f, maximum_radius,
-                   "%.3f", ImGuiSliderFlags_Logarithmic);
-  SliderInputFloat("Initial distance from top (m)",
-                   &config->initial_distance_down_ramp_m, 0.0f,
-                   config->ramp_length_m, "%.3f");
-  SliderInputFloat("Initial downhill velocity (m/s)",
-                   &config->initial_velocity_down_ramp_m_s, -50.0f, 50.0f,
-                   "%+.3f");
-  SliderInputFloat("Initial rolling-positive omega (rad/s)",
-                   &config->initial_angular_velocity_rad_s, -200.0f, 200.0f,
-                   "%+.3f");
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "Radius R (m)", &config->radius_m, 0.02f, maximum_radius, "%.3f",
+      kControlStart, kSliderWidth, kInputWidth, ImGuiSliderFlags_Logarithmic);
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "Initial distance from top (m)", &config->initial_distance_down_ramp_m,
+      0.0f, config->ramp_length_m, "%.3f", kControlStart, kSliderWidth,
+      kInputWidth);
+  tiny2d::sandbox::ui::SliderInputFloat("Initial downhill velocity (m/s)",
+                                        &config->initial_velocity_down_ramp_m_s,
+                                        -50.0f, 50.0f, "%+.3f", kControlStart,
+                                        kSliderWidth, kInputWidth);
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "Initial rolling-positive omega (rad/s)",
+      &config->initial_angular_velocity_rad_s, -200.0f, 200.0f, "%+.3f",
+      kControlStart, kSliderWidth, kInputWidth);
 
   ImGui::Spacing();
   ImGui::TextUnformatted("Contact");
   ImGui::Separator();
-  SliderInputFloat("Static friction coefficient",
-                   &config->static_friction_coefficient, 0.0f, 5.0f, "%.3f");
-  SliderInputFloat("Kinetic friction coefficient",
-                   &config->kinetic_friction_coefficient, 0.0f,
-                   config->static_friction_coefficient, "%.3f");
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "Static friction coefficient", &config->static_friction_coefficient, 0.0f,
+      5.0f, "%.3f", kControlStart, kSliderWidth, kInputWidth);
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "Kinetic friction coefficient", &config->kinetic_friction_coefficient,
+      0.0f, config->static_friction_coefficient, "%.3f", kControlStart,
+      kSliderWidth, kInputWidth);
   ImGui::TextDisabled(
       "Slip is v - R*omega. Pure rolling is reached when slip = 0.");
 
@@ -148,23 +139,26 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::RollingDiskConfig* config) {
   if (ImGui::RadioButton("10", config->gravity_m_s2 == 10.0f)) {
     config->gravity_m_s2 = 10.0f;
   }
-  SliderInputFloat("Charge q (C)", &config->charge_c, -1000.0f, 1000.0f,
-                   "%.6g");
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "Charge q (C)", &config->charge_c, -1000.0f, 1000.0f, "%.6g",
+      kControlStart, kSliderWidth, kInputWidth);
   ImGui::Checkbox("Enable uniform electric field",
                   &config->electric_field_enabled);
   ImGui::BeginDisabled(!config->electric_field_enabled);
-  SliderInputFloat("Electric field E (N/C)",
-                   &config->electric_field_strength_n_c, 0.0f, 1000000.0f,
-                   "%.6g", ImGuiSliderFlags_Logarithmic);
-  SliderInputFloat("E angle from +X, CCW (degrees)",
-                   &config->electric_field_angle_degrees, -180.0f, 180.0f,
-                   "%.2f");
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "Electric field E (N/C)", &config->electric_field_strength_n_c, 0.0f,
+      1000000.0f, "%.6g", kControlStart, kSliderWidth, kInputWidth,
+      ImGuiSliderFlags_Logarithmic);
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "E angle from +X, CCW (degrees)", &config->electric_field_angle_degrees,
+      -180.0f, 180.0f, "%.2f", kControlStart, kSliderWidth, kInputWidth);
   ImGui::EndDisabled();
   ImGui::Checkbox("Enable uniform perpendicular magnetic field",
                   &config->magnetic_field_enabled);
   ImGui::BeginDisabled(!config->magnetic_field_enabled);
-  SliderInputFloat("Signed Bz (+Z out / -Z in) (T)",
-                   &config->magnetic_field_z_t, -100.0f, 100.0f, "%+.4g");
+  tiny2d::sandbox::ui::SliderInputFloat(
+      "Signed Bz (+Z out / -Z in) (T)", &config->magnetic_field_z_t, -100.0f,
+      100.0f, "%+.4g", kControlStart, kSliderWidth, kInputWidth);
   ImGui::EndDisabled();
 
   const char* error = tiny2d::sandbox::GetRollingDiskConfigError(*config);
@@ -202,31 +196,6 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::RollingDiskConfig* config) {
 
   ImGui::End();
   return action;
-}
-
-void DrawArrow(ImDrawList* draw_list, ImVec2 center, ImVec2 direction,
-               float length, ImU32 color) {
-  const float direction_length = std::hypot(direction.x, direction.y);
-  if (direction_length <= 0.0f) {
-    return;
-  }
-  direction.x /= direction_length;
-  direction.y /= direction_length;
-  const ImVec2 start{center.x - direction.x * length * 0.5f,
-                     center.y - direction.y * length * 0.5f};
-  const ImVec2 end{center.x + direction.x * length * 0.5f,
-                   center.y + direction.y * length * 0.5f};
-  draw_list->AddLine(start, end, color, 3.0f);
-  const ImVec2 normal{-direction.y, direction.x};
-  constexpr float kHeadLength = 13.0f;
-  constexpr float kHeadWidth = 7.0f;
-  draw_list->AddTriangleFilled(
-      end,
-      {end.x - direction.x * kHeadLength + normal.x * kHeadWidth,
-       end.y - direction.y * kHeadLength + normal.y * kHeadWidth},
-      {end.x - direction.x * kHeadLength - normal.x * kHeadWidth,
-       end.y - direction.y * kHeadLength - normal.y * kHeadWidth},
-      color);
 }
 
 void DrawScene(const tiny2d::sandbox::RollingDiskConfig& config,
@@ -296,16 +265,18 @@ void DrawScene(const tiny2d::sandbox::RollingDiskConfig& config,
 
   if (std::abs(derived.friction_force_n) > 0.00001f) {
     const float friction_sign = std::copysign(1.0f, derived.friction_force_n);
-    DrawArrow(draw_list, center,
-              {downhill.x * friction_sign, downhill.y * friction_sign}, 62.0f,
-              IM_COL32(100, 205, 245, 255));
+    tiny2d::sandbox::ui::DrawCenteredArrow(
+        draw_list, center,
+        {downhill.x * friction_sign, downhill.y * friction_sign}, 62.0f,
+        IM_COL32(100, 205, 245, 255));
   }
   if (std::abs(derived.magnetic_force_outward_n) > 0.00001f) {
     const float magnetic_sign =
         std::copysign(1.0f, derived.magnetic_force_outward_n);
-    DrawArrow(draw_list, center,
-              {outward.x * magnetic_sign, outward.y * magnetic_sign}, 62.0f,
-              IM_COL32(205, 125, 255, 255));
+    tiny2d::sandbox::ui::DrawCenteredArrow(
+        draw_list, center,
+        {outward.x * magnetic_sign, outward.y * magnetic_sign}, 62.0f,
+        IM_COL32(205, 125, 255, 255));
   }
 
   draw_list->PathArcTo(bottom, 44.0f, -angle, 0.0f, 18);
@@ -320,8 +291,9 @@ void DrawScene(const tiny2d::sandbox::RollingDiskConfig& config,
     const float field_angle =
         config.electric_field_angle_degrees * kDegreesToRadians;
     const ImVec2 field_direction{std::cos(field_angle), -std::sin(field_angle)};
-    DrawArrow(draw_list, {display_size.x - 135.0f, display_size.y - 165.0f},
-              field_direction, 80.0f, IM_COL32(100, 225, 150, 255));
+    tiny2d::sandbox::ui::DrawCenteredArrow(
+        draw_list, {display_size.x - 135.0f, display_size.y - 165.0f},
+        field_direction, 80.0f, IM_COL32(100, 225, 150, 255));
     char field_label[88];
     std::snprintf(field_label, sizeof(field_label),
                   "E = %.4g N/C, %.2f deg from +X CCW",
@@ -357,8 +329,9 @@ void DrawScene(const tiny2d::sandbox::RollingDiskConfig& config,
                        field_color, magnetic_field_label);
   }
 
-  DrawArrow(draw_list, {display_size.x - 340.0f, display_size.y - 165.0f},
-            {0.0f, 1.0f}, 80.0f, IM_COL32(245, 190, 90, 255));
+  tiny2d::sandbox::ui::DrawCenteredArrow(
+      draw_list, {display_size.x - 340.0f, display_size.y - 165.0f},
+      {0.0f, 1.0f}, 80.0f, IM_COL32(245, 190, 90, 255));
   char gravity_label[48];
   std::snprintf(gravity_label, sizeof(gravity_label), "g = %.3g m/s^2",
                 config.gravity_m_s2);
@@ -369,7 +342,7 @@ void DrawScene(const tiny2d::sandbox::RollingDiskConfig& config,
 bool DrawMonitor(const tiny2d::sandbox::RollingDiskConfig& config,
                  const tiny2d::sandbox::RollingDiskState& current_state,
                  const std::vector<tiny2d::sandbox::RollingDiskState>& history,
-                 bool* paused, float* inspect_time, bool* follow_live,
+                 bool* paused, double* inspect_time, bool* follow_live,
                  const char* runtime_error) {
   ImGui::SetNextWindowPos({12.0f, 12.0f});
   ImGui::SetNextWindowSize({410.0f, 700.0f});
@@ -402,21 +375,23 @@ bool DrawMonitor(const tiny2d::sandbox::RollingDiskConfig& config,
   ImGui::SameLine();
   ImGui::TextUnformatted("Inspect time");
   ImGui::SameLine();
-  const float maximum_inspect_time =
-      std::max(current_state.time_seconds, kPhysicsStep);
+  const double maximum_inspect_time =
+      std::max(current_state.time_seconds, static_cast<double>(kPhysicsStep));
   ImGui::SetNextItemWidth(120.0f);
-  bool inspect_changed = ImGui::SliderFloat(
-      "##rolling_history_slider", inspect_time, 0.0f, maximum_inspect_time,
-      "%.3f", ImGuiSliderFlags_AlwaysClamp);
+  constexpr double kMinimumInspectTime = 0.0;
+  bool inspect_changed = ImGui::SliderScalar(
+      "##rolling_history_slider", ImGuiDataType_Double, inspect_time,
+      &kMinimumInspectTime, &maximum_inspect_time, "%.3f",
+      ImGuiSliderFlags_AlwaysClamp);
   ImGui::SameLine();
   ImGui::SetNextItemWidth(70.0f);
-  inspect_changed |= ImGui::InputFloat("##rolling_history_input", inspect_time,
-                                       0.0f, 0.0f, "%.3f");
+  inspect_changed |= ImGui::InputDouble("##rolling_history_input", inspect_time,
+                                        0.0, 0.0, "%.3f");
   if (inspect_changed) {
     if (!std::isfinite(*inspect_time)) {
       *inspect_time = current_state.time_seconds;
     }
-    *inspect_time = std::clamp(*inspect_time, 0.0f, current_state.time_seconds);
+    *inspect_time = std::clamp(*inspect_time, 0.0, current_state.time_seconds);
     *follow_live = false;
   }
 
@@ -494,17 +469,14 @@ SimulationResult RunRollingDiskSimulation(SDL_Renderer* renderer) {
 
   RollingDiskConfig config;
   RollingDiskState state = MakeInitialRollingDiskState(config);
-  // ponytail: Keep one short laboratory run in memory; cap only when long
-  // sessions become a real use case.
   std::vector<RollingDiskState> history;
   bool simulation_started = false;
   bool paused = false;
   bool follow_live = true;
-  float inspect_time = 0.0f;
+  double inspect_time = 0.0;
   const char* runtime_error = nullptr;
-  double accumulated_time = 0.0;
-  const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
-  Uint64 previous_time = SDL_GetPerformanceCounter();
+  FixedStepClock clock(static_cast<double>(SDL_GetPerformanceFrequency()),
+                       SDL_GetPerformanceCounter());
 
   while (true) {
     bool return_requested = false;
@@ -529,41 +501,46 @@ SimulationResult RunRollingDiskSimulation(SDL_Renderer* renderer) {
 
     const Uint64 current_time = SDL_GetPerformanceCounter();
     if (!return_requested && !simulation_started) {
-      previous_time = current_time;
-      accumulated_time = 0.0;
+      clock.Reset(current_time);
       const SetupAction action = DrawSetupScreen(&config);
       if (action == SetupAction::kBack) {
         return_requested = true;
       } else if (action == SetupAction::kStart) {
         state = MakeInitialRollingDiskState(config);
         history.clear();
-        history.push_back(state);
+        const bool recorded = AppendHistorySample(
+            &history, state, &RollingDiskState::time_seconds);
         simulation_started = true;
-        paused = state.status != RollingDiskStatus::kActive;
+        paused = !recorded || state.status != RollingDiskStatus::kActive;
         follow_live = true;
-        inspect_time = 0.0f;
-        runtime_error = state.status == RollingDiskStatus::kAirborne
-                            ? "The initial compound-field configuration has "
-                              "no ramp contact."
-                            : nullptr;
-        previous_time = current_time;
+        inspect_time = 0.0;
+        runtime_error =
+            !recorded ? "The rolling model produced an invalid history time."
+            : state.status == RollingDiskStatus::kAirborne
+                ? "The initial compound-field configuration has no ramp "
+                  "contact."
+                : nullptr;
+        clock.Reset(current_time);
       }
     } else if (simulation_started) {
       if (!return_requested && !paused && runtime_error == nullptr &&
           state.status == RollingDiskStatus::kActive) {
-        const double frame_time = std::min(
-            static_cast<double>(current_time - previous_time) / frequency,
-            kMaximumFrameTime);
-        previous_time = current_time;
-        accumulated_time += frame_time;
-        while (accumulated_time >= kPhysicsStep) {
+        clock.Accumulate(current_time, kMaximumFrameTime);
+        while (clock.HasStep(kPhysicsStep)) {
           if (!StepRollingDisk(config, kPhysicsStep, &state)) {
             if (state.status == RollingDiskStatus::kAirborne) {
               if (!history.empty() &&
-                  state.time_seconds <= history.back().time_seconds) {
+                  state.time_seconds == history.back().time_seconds) {
                 history.back() = state;
-              } else {
-                history.push_back(state);
+              } else if (!AppendHistorySample(
+                             &history, state,
+                             &RollingDiskState::time_seconds)) {
+                runtime_error =
+                    "The rolling model produced a non-increasing history "
+                    "time.";
+                paused = true;
+                clock.DiscardPendingSteps();
+                break;
               }
               runtime_error =
                   "The compound fields caused the body to lose ramp contact.";
@@ -575,20 +552,26 @@ SimulationResult RunRollingDiskSimulation(SDL_Renderer* renderer) {
                   "The fixed-step rolling model rejected this state.";
             }
             paused = true;
-            accumulated_time = 0.0;
+            clock.DiscardPendingSteps();
             break;
           }
-          history.push_back(state);
-          accumulated_time -= kPhysicsStep;
+          if (!AppendHistorySample(&history, state,
+                                   &RollingDiskState::time_seconds)) {
+            runtime_error =
+                "The rolling model produced a non-increasing history time.";
+            paused = true;
+            clock.DiscardPendingSteps();
+            break;
+          }
+          clock.ConsumeStep(kPhysicsStep);
           if (state.status != RollingDiskStatus::kActive) {
             paused = true;
-            accumulated_time = 0.0;
+            clock.DiscardPendingSteps();
             break;
           }
         }
       } else {
-        previous_time = current_time;
-        accumulated_time = 0.0;
+        clock.Reset(current_time);
       }
 
       DrawScene(config, state);

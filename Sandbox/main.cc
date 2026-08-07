@@ -4,6 +4,7 @@
 #include <imgui_impl_sdlrenderer2.h>
 
 #include <algorithm>
+#include <exception>
 
 #include "simulations.h"
 
@@ -130,9 +131,10 @@ int main(int, char*[]) {
     return 1;
   }
 
-  SDL_Window* window = SDL_CreateWindow(
-      "Tiny2D Engine V14", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-      kWindowWidth, kWindowHeight, SDL_WINDOW_SHOWN);
+  SDL_Window* window =
+      SDL_CreateWindow("Tiny2D Engine V14 Development (2.0 release base)",
+                       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                       kWindowWidth, kWindowHeight, SDL_WINDOW_SHOWN);
   if (window == nullptr) {
     ShowError("The application window could not be created.");
     SDL_Quit();
@@ -185,23 +187,29 @@ int main(int, char*[]) {
     return 1;
   }
 
-  bool running = true;
-  while (running) {
-    const ModelChoice choice = ChooseModel(renderer);
-    tiny2d::sandbox::SimulationResult result =
-        tiny2d::sandbox::SimulationResult::kQuit;
-    if (choice == ModelChoice::kInclineSpring) {
-      result = tiny2d::sandbox::RunInclineSpringSimulation(renderer);
-    } else if (choice == ModelChoice::kRotationPendulum) {
-      result = tiny2d::sandbox::RunRotationPendulumSimulation(renderer);
-    } else if (choice == ModelChoice::kRollingDisk) {
-      result = tiny2d::sandbox::RunRollingDiskSimulation(renderer);
-    } else if (choice == ModelChoice::kLorentzParticle) {
-      result = tiny2d::sandbox::RunLorentzParticleSimulation(renderer);
-    } else {
-      break;
+  int exit_code = 0;
+  try {
+    bool running = true;
+    while (running) {
+      const ModelChoice choice = ChooseModel(renderer);
+      tiny2d::sandbox::SimulationResult result =
+          tiny2d::sandbox::SimulationResult::kQuit;
+      if (choice == ModelChoice::kInclineSpring) {
+        result = tiny2d::sandbox::RunInclineSpringSimulation(renderer);
+      } else if (choice == ModelChoice::kRotationPendulum) {
+        result = tiny2d::sandbox::RunRotationPendulumSimulation(renderer);
+      } else if (choice == ModelChoice::kRollingDisk) {
+        result = tiny2d::sandbox::RunRollingDiskSimulation(renderer);
+      } else if (choice == ModelChoice::kLorentzParticle) {
+        result = tiny2d::sandbox::RunLorentzParticleSimulation(renderer);
+      } else {
+        break;
+      }
+      running = result != tiny2d::sandbox::SimulationResult::kQuit;
     }
-    running = result != tiny2d::sandbox::SimulationResult::kQuit;
+  } catch (const std::exception& error) {
+    ShowError(error.what());
+    exit_code = 1;
   }
 
   ImGui_ImplSDLRenderer2_Shutdown();
@@ -210,5 +218,5 @@ int main(int, char*[]) {
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();
-  return 0;
+  return exit_code;
 }

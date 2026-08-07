@@ -8,10 +8,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
-#include <exception>
+#include <stdexcept>
 #include <vector>
 
+#include "fixed_step_clock.h"
 #include "incline_spring_model.h"
+#include "sim_ui.h"
 #include "simulations.h"
 #include "tiny2d_engine.h"
 
@@ -19,6 +21,9 @@ namespace tiny2d::sandbox::incline_spring {
 namespace {
 
 constexpr float kMonitorHeight = 250.0f;
+constexpr float kControlStart = 260.0f;
+constexpr float kSliderWidth = 320.0f;
+constexpr float kInputWidth = 100.0f;
 constexpr float kDegreesToRadians = 0.01745329252f;
 constexpr float kSpringAmplitude = 10.0f;
 constexpr int kSpringCoilCount = 10;
@@ -26,34 +31,12 @@ constexpr double kMaxFrameTime = 0.25;
 constexpr std::array<int, 6> kRectangleIndices = {0, 1, 2, 0, 2, 3};
 constexpr std::array<const char*, 2> kBodyLabels = {"A", "B"};
 
-bool SliderInputFloat(const char* label, float* value, float minimum,
-                      float maximum, const char* format,
-                      ImGuiSliderFlags flags = ImGuiSliderFlags_None) {
-  constexpr float kControlStart = 260.0f;
-  constexpr float kSliderWidth = 320.0f;
-  constexpr float kInputWidth = 100.0f;
-
-  ImGui::PushID(label);
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted(label);
-  ImGui::SameLine(kControlStart);
-  ImGui::SetNextItemWidth(kSliderWidth);
-  bool changed = ImGui::SliderFloat("##slider", value, minimum, maximum, format,
-                                    flags | ImGuiSliderFlags_AlwaysClamp);
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(kInputWidth);
-  changed |= ImGui::InputFloat("##input", value, 0.0f, 0.0f, format);
-  *value = std::clamp(*value, minimum, maximum);
-  ImGui::PopID();
-  return changed;
-}
-
 void DrawChargeControls(const char* label, BodyConfig* body_config) {
   ImGui::PushID(label);
   ImGui::Checkbox(label, &body_config->charged);
   ImGui::BeginDisabled(!body_config->charged);
-  SliderInputFloat("Charge q (C)", &body_config->charge, -1000.0f, 1000.0f,
-                   "%.6g");
+  ui::SliderInputFloat("Charge q (C)", &body_config->charge, -1000.0f, 1000.0f,
+                       "%.6g", kControlStart, kSliderWidth, kInputWidth);
   ImGui::EndDisabled();
   ImGui::PopID();
 }
@@ -77,10 +60,12 @@ void DrawBodyControls(const char* title, BodyConfig* body_config,
   ImGui::TextDisabled(
       starts_on_ramp ? "Position: right is higher. Speed: positive is downhill."
                      : "Position is on the floor. Speed: positive moves left.");
-  SliderInputFloat(starts_on_ramp ? "Ramp x (px)" : "Floor x (px)",
-                   &body_config->surface_x, minimum_x, maximum_x, "%.1f");
-  SliderInputFloat("Pixel initial speed (px/s)", &body_config->downhill_speed,
-                   -5000.0f, 5000.0f, "%.1f");
+  ui::SliderInputFloat(starts_on_ramp ? "Ramp x (px)" : "Floor x (px)",
+                       &body_config->surface_x, minimum_x, maximum_x, "%.1f",
+                       kControlStart, kSliderWidth, kInputWidth);
+  ui::SliderInputFloat("Pixel initial speed (px/s)",
+                       &body_config->downhill_speed, -5000.0f, 5000.0f, "%.1f",
+                       kControlStart, kSliderWidth, kInputWidth);
   ImGui::PopID();
 }
 
@@ -108,20 +93,27 @@ bool DrawSetupScreen(SimulationConfig* config, bool* back_to_selection) {
       "Enter the problem values. Body A defines the speed and mass scales; "
       "Body B uses the same mass scale.");
   ImGui::Checkbox("Enable ramp", &config->ramp_enabled);
-  SliderInputFloat("Floor length (m)", &config->real_floor_length_m, 0.1f,
-                   10000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+  ui::SliderInputFloat("Floor length (m)", &config->real_floor_length_m, 0.1f,
+                       10000.0f, "%.3f", kControlStart, kSliderWidth,
+                       kInputWidth, ImGuiSliderFlags_Logarithmic);
   ImGui::BeginDisabled(!config->ramp_enabled);
-  SliderInputFloat("Ramp angle (degrees)", &config->ramp_angle_degrees, 5.0f,
-                   45.0f, "%.1f");
-  SliderInputFloat("Ramp length (m)", &config->real_ramp_length_m, 0.1f,
-                   10000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+  ui::SliderInputFloat("Ramp angle (degrees)", &config->ramp_angle_degrees,
+                       5.0f, 45.0f, "%.1f", kControlStart, kSliderWidth,
+                       kInputWidth);
+  ui::SliderInputFloat("Ramp length (m)", &config->real_ramp_length_m, 0.1f,
+                       10000.0f, "%.3f", kControlStart, kSliderWidth,
+                       kInputWidth, ImGuiSliderFlags_Logarithmic);
   ImGui::EndDisabled();
-  SliderInputFloat("Body A reference speed (m/s)", &config->reference_speed_mps,
-                   0.01f, 1000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
-  SliderInputFloat("Body A reference mass (kg)", &config->body_a.mass_kg, 0.01f,
-                   10000.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
-  SliderInputFloat("Body B mass (kg)", &config->body_b.mass_kg, 0.01f, 10000.0f,
-                   "%.3f", ImGuiSliderFlags_Logarithmic);
+  ui::SliderInputFloat("Body A reference speed (m/s)",
+                       &config->reference_speed_mps, 0.01f, 1000.0f, "%.3f",
+                       kControlStart, kSliderWidth, kInputWidth,
+                       ImGuiSliderFlags_Logarithmic);
+  ui::SliderInputFloat("Body A reference mass (kg)", &config->body_a.mass_kg,
+                       0.01f, 10000.0f, "%.3f", kControlStart, kSliderWidth,
+                       kInputWidth, ImGuiSliderFlags_Logarithmic);
+  ui::SliderInputFloat("Body B mass (kg)", &config->body_b.mass_kg, 0.01f,
+                       10000.0f, "%.3f", kControlStart, kSliderWidth,
+                       kInputWidth, ImGuiSliderFlags_Logarithmic);
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("Gravity (m/s^2)");
   ImGui::SameLine(260.0f);
@@ -145,21 +137,23 @@ bool DrawSetupScreen(SimulationConfig* config, bool* back_to_selection) {
 
   ImGui::TextUnformatted("Physical model");
   ImGui::Separator();
-  SliderInputFloat("Surface friction", &config->friction, 0.0f, 5.0f, "%.2f");
-  SliderInputFloat("Collision bounciness", &config->restitution, 0.0f, 1.0f,
-                   "%.2f");
+  ui::SliderInputFloat("Surface friction", &config->friction, 0.0f, 5.0f,
+                       "%.2f", kControlStart, kSliderWidth, kInputWidth);
+  ui::SliderInputFloat("Collision bounciness", &config->restitution, 0.0f, 1.0f,
+                       "%.2f", kControlStart, kSliderWidth, kInputWidth);
 
   ImGui::Checkbox("Enable electric field", &config->electric_field_enabled);
   ImGui::BeginDisabled(!config->electric_field_enabled);
   ImGui::TextDisabled(
       "Uniform E field in N/C. Angle is counterclockwise from +X: 0 right, "
       "90 up, -90 down.");
-  SliderInputFloat("Electric field strength E (N/C)",
-                   &config->electric_field_strength_n_per_c, 0.0f, 1000000.0f,
-                   "%.6g");
-  SliderInputFloat("Electric field angle (degrees)",
-                   &config->electric_field_angle_degrees, -180.0f, 180.0f,
-                   "%.1f");
+  ui::SliderInputFloat("Electric field strength E (N/C)",
+                       &config->electric_field_strength_n_per_c, 0.0f,
+                       1000000.0f, "%.6g", kControlStart, kSliderWidth,
+                       kInputWidth);
+  ui::SliderInputFloat("Electric field angle (degrees)",
+                       &config->electric_field_angle_degrees, -180.0f, 180.0f,
+                       "%.1f", kControlStart, kSliderWidth, kInputWidth);
   DrawChargeControls("Body A carries charge", &config->body_a);
   DrawChargeControls("Body B carries charge", &config->body_b);
   ImGui::EndDisabled();
@@ -169,12 +163,14 @@ bool DrawSetupScreen(SimulationConfig* config, bool* back_to_selection) {
     ImGui::TextDisabled(
         "These values control the pixel simulation and normally stay at their "
         "defaults.");
-    SliderInputFloat("Body A engine reference mass",
-                     &config->body_a_engine_mass, 0.01f, 1000.0f, "%.3f",
-                     ImGuiSliderFlags_Logarithmic);
+    ui::SliderInputFloat("Body A engine reference mass",
+                         &config->body_a_engine_mass, 0.01f, 1000.0f, "%.3f",
+                         kControlStart, kSliderWidth, kInputWidth,
+                         ImGuiSliderFlags_Logarithmic);
     ImGui::BeginDisabled(!config->spring_enabled);
-    SliderInputFloat("Spring strength", &config->spring_stiffness, 0.1f, 100.0f,
-                     "%.1f", ImGuiSliderFlags_Logarithmic);
+    ui::SliderInputFloat("Spring strength", &config->spring_stiffness, 0.1f,
+                         100.0f, "%.1f", kControlStart, kSliderWidth,
+                         kInputWidth, ImGuiSliderFlags_Logarithmic);
     ImGui::EndDisabled();
     ImGui::Separator();
     DrawBodyControls("Body A", &config->body_a, *config);
@@ -253,14 +249,14 @@ void DrawRectangle(SDL_Renderer* renderer, const tiny2d::Rectangle& rectangle) {
       kRectangleIndices.data(), static_cast<int>(kRectangleIndices.size()));
 }
 
-void DrawMonitorWindow(const State& state, bool* paused, float* inspect_time,
+void DrawMonitorWindow(const State& state, bool* paused, double* inspect_time,
                        bool* follow_live, bool* back_to_selection) {
   const SimulationConfig& config = state.config;
-  const float simulation_time = state.time;
+  const double simulation_time = state.time;
   const float length_scale = GetPixelsPerMeter(config);
   const float speed_scale = GetPixelSpeedPerMeterPerSecond(config);
-  const float time_scale = GetRealSecondsPerSimulationSecond(config);
-  const float real_simulation_time = simulation_time * time_scale;
+  const double time_scale = GetRealSecondsPerSimulationSecond(config);
+  const double real_simulation_time = simulation_time * time_scale;
   ImGuiIO& io = ImGui::GetIO();
   ImGui::SetNextWindowPos({0.0f, 0.0f});
   ImGui::SetNextWindowSize({io.DisplaySize.x, kMonitorHeight});
@@ -294,11 +290,16 @@ void DrawMonitorWindow(const State& state, bool* paused, float* inspect_time,
   if (*follow_live) {
     *inspect_time = real_simulation_time;
   }
-  const float maximum_inspect_time =
+  const double maximum_inspect_time =
       std::max(real_simulation_time, kPhysicsStep * time_scale);
-  if (SliderInputFloat("Inspect time (s)", inspect_time, 0.0f,
-                       maximum_inspect_time, "%.3f")) {
-    *inspect_time = std::min(*inspect_time, real_simulation_time);
+  if (ui::SliderInputDouble("Inspect time (s)", inspect_time, 0.0,
+                            maximum_inspect_time, "%.3f", kControlStart,
+                            kSliderWidth, kInputWidth)) {
+    if (!std::isfinite(*inspect_time)) {
+      *inspect_time = real_simulation_time;
+    } else {
+      *inspect_time = std::min(*inspect_time, real_simulation_time);
+    }
     *follow_live = false;
   }
 
@@ -373,33 +374,6 @@ void DrawMonitorWindow(const State& state, bool* paused, float* inspect_time,
   ImGui::End();
 }
 
-void DrawFieldArrow(ImDrawList* draw_list, ImVec2 center, ImVec2 direction,
-                    float length, ImU32 color) {
-  const float direction_length = std::hypot(direction.x, direction.y);
-  if (direction_length <= 0.0f) {
-    return;
-  }
-
-  direction.x /= direction_length;
-  direction.y /= direction_length;
-  const ImVec2 start{center.x - direction.x * length * 0.5f,
-                     center.y - direction.y * length * 0.5f};
-  const ImVec2 end{center.x + direction.x * length * 0.5f,
-                   center.y + direction.y * length * 0.5f};
-  draw_list->AddLine(start, end, color, 3.0f);
-
-  constexpr float kHeadLength = 13.0f;
-  constexpr float kHeadWidth = 7.0f;
-  const ImVec2 normal{-direction.y, direction.x};
-  draw_list->AddTriangleFilled(
-      end,
-      {end.x - direction.x * kHeadLength + normal.x * kHeadWidth,
-       end.y - direction.y * kHeadLength + normal.y * kHeadWidth},
-      {end.x - direction.x * kHeadLength - normal.x * kHeadWidth,
-       end.y - direction.y * kHeadLength - normal.y * kHeadWidth},
-      color);
-}
-
 void DrawSimulationLabels(const std::vector<tiny2d::Rectangle>& bodies,
                           const SimulationConfig& config) {
   constexpr float kBodyFontSize = 18.0f;
@@ -415,8 +389,8 @@ void DrawSimulationLabels(const std::vector<tiny2d::Rectangle>& bodies,
     const float field_angle =
         config.electric_field_angle_degrees * kDegreesToRadians;
     const ImVec2 field_direction{std::cos(field_angle), -std::sin(field_angle)};
-    DrawFieldArrow(draw_list, {100.0f, 310.0f}, field_direction, 80.0f,
-                   IM_COL32(100, 225, 150, 255));
+    ui::DrawCenteredArrow(draw_list, {100.0f, 310.0f}, field_direction, 80.0f,
+                          IM_COL32(100, 225, 150, 255));
     char field_label[80];
     std::snprintf(field_label, sizeof(field_label),
                   "E = %.4g N/C, %.2f deg from +X CCW",
@@ -426,8 +400,8 @@ void DrawSimulationLabels(const std::vector<tiny2d::Rectangle>& bodies,
                        field_label);
   }
 
-  DrawFieldArrow(draw_list, {100.0f, 420.0f}, {0.0f, 1.0f}, 80.0f,
-                 IM_COL32(245, 190, 90, 255));
+  ui::DrawCenteredArrow(draw_list, {100.0f, 420.0f}, {0.0f, 1.0f}, 80.0f,
+                        IM_COL32(245, 190, 90, 255));
   char gravity_label[64];
   std::snprintf(gravity_label, sizeof(gravity_label),
                 "g = %.3g m/s^2, downward (-Y)", config.gravity_mps2);
@@ -492,23 +466,26 @@ void DrawSimulationLabels(const std::vector<tiny2d::Rectangle>& bodies,
 }  // namespace
 
 SimulationResult RunInclineSpringSimulation(SDL_Renderer* renderer) {
+  if (renderer == nullptr) {
+    return SimulationResult::kBackToSelection;
+  }
+
   SimulationConfig config;
   State state;
   bool simulation_started = false;
   bool simulation_paused = false;
   bool follow_live = true;
   bool back_to_selection = false;
-  float inspect_time = 0.0f;
+  double inspect_time = 0.0;
 
-  const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
-  Uint64 previous_time = SDL_GetPerformanceCounter();
-  double accumulated_time = 0.0;
+  FixedStepClock clock(static_cast<double>(SDL_GetPerformanceFrequency()),
+                       SDL_GetPerformanceCounter());
   const auto stop_simulation = [&](const char* message) {
     simulation_started = false;
     simulation_paused = false;
     state.bodies.clear();
     state.history.clear();
-    accumulated_time = 0.0;
+    clock.DiscardPendingSteps();
     ShowError(message);
   };
 
@@ -531,39 +508,33 @@ SimulationResult RunInclineSpringSimulation(SDL_Renderer* renderer) {
 
     const Uint64 current_time = SDL_GetPerformanceCounter();
     if (!simulation_started) {
-      previous_time = current_time;
-      accumulated_time = 0.0;
+      clock.Reset(current_time);
       if (DrawSetupScreen(&config, &back_to_selection)) {
         if (const char* error = Reset(config, state); error != nullptr) {
           ShowError(error);
         } else {
           simulation_paused = false;
           follow_live = true;
-          inspect_time = 0.0f;
+          inspect_time = 0.0;
           simulation_started = true;
         }
       }
     } else if (simulation_paused) {
-      previous_time = current_time;
-      accumulated_time = 0.0;
+      clock.Reset(current_time);
     } else {
-      const double frame_time = std::min(
-          static_cast<double>(current_time - previous_time) / frequency,
-          kMaxFrameTime);
-      previous_time = current_time;
-      accumulated_time += frame_time;
+      clock.Accumulate(current_time, kMaxFrameTime);
 
-      while (accumulated_time >= kPhysicsStep) {
+      while (clock.HasStep(kPhysicsStep)) {
         try {
           if (const char* error = Step(state, kPhysicsStep); error != nullptr) {
             stop_simulation(error);
             break;
           }
-        } catch (const std::exception& error) {
+        } catch (const std::invalid_argument& error) {
           stop_simulation(error.what());
           break;
         }
-        accumulated_time -= kPhysicsStep;
+        clock.ConsumeStep(kPhysicsStep);
       }
     }
 

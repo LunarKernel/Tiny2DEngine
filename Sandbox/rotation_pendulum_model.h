@@ -55,7 +55,8 @@ struct PendulumState {
   float angle_radians{};
   float angular_velocity_rad_s{};
   float angular_acceleration_rad_s2{};
-  float time_seconds{};
+  // Elapsed simulation time in seconds. Must be finite and nonnegative.
+  double time_seconds{};
 };
 
 struct PendulumDerived {
@@ -83,10 +84,10 @@ bool IsPendulumDerivedFinite(const PendulumDerived& derived);
 // Returns the reset state described by config at t = 0 s.
 PendulumState MakeInitialPendulumState(const PendulumConfig& config);
 
-// History must be sorted by nondecreasing time. The nearest state is returned;
-// empty history or a non-finite query returns nullptr.
+// History must be sorted by strictly increasing time in seconds. The nearest
+// state is returned; empty history or a non-finite query returns nullptr.
 const PendulumState* FindPendulumState(
-    const std::vector<PendulumState>& history, float time_seconds);
+    const std::vector<PendulumState>& history, double time_seconds);
 
 const char* GetPendulumStateError(const PendulumConfig& config,
                                   const PendulumState& state);

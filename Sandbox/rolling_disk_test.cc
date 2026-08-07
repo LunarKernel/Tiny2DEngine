@@ -46,6 +46,11 @@ bool Near(float actual, float expected, float tolerance = kTolerance) {
          tolerance * std::max({1.0f, std::abs(actual), std::abs(expected)});
 }
 
+bool NearTime(double actual, double expected, double tolerance = 0.000001) {
+  return std::abs(actual - expected) <=
+         tolerance * std::max({1.0, std::abs(actual), std::abs(expected)});
+}
+
 bool SameState(const RollingDiskState& a, const RollingDiskState& b) {
   return a.distance_down_ramp_m == b.distance_down_ramp_m &&
          a.velocity_down_ramp_m_s == b.velocity_down_ramp_m_s &&
@@ -382,7 +387,7 @@ void TestMagneticAirborneEvents() {
     }
   }
   CHECK(became_airborne);
-  CHECK(state.time_seconds > 0.0f && state.time_seconds < 5.0f);
+  CHECK(state.time_seconds > 0.0 && state.time_seconds < 5.0);
   CHECK(state.distance_down_ramp_m > 0.0f &&
         state.distance_down_ramp_m < config.ramp_length_m);
 }
@@ -406,7 +411,7 @@ void TestAirborneWinsEndpointTie() {
   CHECK(state.status == RollingDiskStatus::kActive);
   CHECK(!StepRollingDisk(config, 0.2f, &state));
   CHECK(state.status == RollingDiskStatus::kAirborne);
-  CHECK(Near(state.time_seconds, 0.15f, 0.00001f));
+  CHECK(NearTime(state.time_seconds, 0.15, 0.00001));
 }
 
 void TestAirborneWinsSlipTransitionTie() {
@@ -430,7 +435,7 @@ void TestAirborneWinsSlipTransitionTie() {
   CHECK(state.contact_mode == RollingContactMode::kSliding);
   CHECK(!StepRollingDisk(config, 0.25f, &state));
   CHECK(state.status == RollingDiskStatus::kAirborne);
-  CHECK(Near(state.time_seconds, 0.2f, 0.00001f));
+  CHECK(NearTime(state.time_seconds, 0.2, 0.00001));
 }
 
 void TestMagneticEnergyAndStepConvergence() {
@@ -498,17 +503,17 @@ void TestMagneticEnergyAndStepConvergence() {
 
 void TestHistoryLookup() {
   std::vector<RollingDiskState> history(3);
-  history[0].time_seconds = 0.0f;
-  history[1].time_seconds = 1.0f;
-  history[2].time_seconds = 2.0f;
+  history[0].time_seconds = 0.0;
+  history[1].time_seconds = 1.0;
+  history[2].time_seconds = 2.0;
 
-  CHECK(FindRollingDiskState({}, 0.0f) == nullptr);
+  CHECK(FindRollingDiskState({}, 0.0) == nullptr);
   CHECK(FindRollingDiskState(
-            history, std::numeric_limits<float>::quiet_NaN()) == nullptr);
-  CHECK(FindRollingDiskState(history, -1.0f) == &history[0]);
-  CHECK(FindRollingDiskState(history, 0.5f) == &history[0]);
-  CHECK(FindRollingDiskState(history, 0.6f) == &history[1]);
-  CHECK(FindRollingDiskState(history, 3.0f) == &history[2]);
+            history, std::numeric_limits<double>::quiet_NaN()) == nullptr);
+  CHECK(FindRollingDiskState(history, -1.0) == &history[0]);
+  CHECK(FindRollingDiskState(history, 0.5) == &history[0]);
+  CHECK(FindRollingDiskState(history, 0.6) == &history[1]);
+  CHECK(FindRollingDiskState(history, 3.0) == &history[2]);
 }
 
 void TestRampEndpointStates() {
@@ -523,7 +528,7 @@ void TestRampEndpointStates() {
   CHECK(StepRollingDisk(config, 0.1f, &state));
   CHECK(state.status == RollingDiskStatus::kReachedBottom);
   CHECK(state.distance_down_ramp_m == config.ramp_length_m);
-  CHECK(Near(state.time_seconds, 0.05f, 0.000001f));
+  CHECK(NearTime(state.time_seconds, 0.05));
   CHECK(Near(state.angle_radians, 0.4f, 0.000001f));
   CHECK(!StepRollingDisk(config, kStep, &state));
 
@@ -535,7 +540,7 @@ void TestRampEndpointStates() {
   CHECK(StepRollingDisk(config, 0.1f, &state));
   CHECK(state.status == RollingDiskStatus::kReachedTop);
   CHECK(state.distance_down_ramp_m == 0.0f);
-  CHECK(Near(state.time_seconds, 0.05f, 0.000001f));
+  CHECK(NearTime(state.time_seconds, 0.05));
   CHECK(Near(state.angle_radians, -0.4f, 0.000001f));
 
   config.initial_distance_down_ramp_m = config.ramp_length_m;
@@ -589,11 +594,11 @@ void TestEndpointUsesFirstTrajectoryHit() {
 
   // s(t) = 0.1 - 2t + 5t^2 crosses the top and then returns inside before
   // t = 0.5. The first root, not the final in-range position, ends the step.
-  constexpr float kFirstHitTime = 0.058578644f;
+  constexpr double kFirstHitTime = 0.058578644;
   CHECK(StepRollingDisk(config, 0.5f, &state));
   CHECK(state.status == RollingDiskStatus::kReachedTop);
   CHECK(state.distance_down_ramp_m == 0.0f);
-  CHECK(Near(state.time_seconds, kFirstHitTime, 0.000001f));
+  CHECK(NearTime(state.time_seconds, kFirstHitTime));
   CHECK(Near(state.velocity_down_ramp_m_s, -1.41421356f, 0.000001f));
   CHECK(Near(state.angle_radians, -0.4f, 0.000001f));
 }
@@ -745,7 +750,7 @@ void TestInvalidAndExtremeInputs() {
   CHECK(SameState(state, original));
   CHECK(!StepRollingDisk(config, kStep, nullptr));
 
-  state.time_seconds = std::numeric_limits<float>::infinity();
+  state.time_seconds = std::numeric_limits<double>::infinity();
   CHECK(GetRollingDiskStateError(config, state) != nullptr);
   CHECK(!StepRollingDisk(config, kStep, &state));
 }
@@ -769,6 +774,18 @@ void TestLongRunIsFiniteAndDeterministic() {
     CHECK(GetRollingDiskStateError(config, first) == nullptr);
   }
   CHECK(SameState(first, second));
+}
+
+void TestLargeSimulationTimeStillAdvances() {
+  RollingDiskConfig config;
+  config.ramp_length_m = 100.0f;
+  RollingDiskState state = MakeInitialRollingDiskState(config);
+  state.time_seconds = 1000000.0;
+  const double previous_time = state.time_seconds;
+  CHECK(StepRollingDisk(config, kStep, &state));
+  CHECK(state.time_seconds > previous_time);
+  CHECK(NearTime(state.time_seconds - previous_time, static_cast<double>(kStep),
+                 1e-9));
 }
 
 using TestFunction = void (*)();
@@ -807,6 +824,8 @@ int main() {
       NamedTest{"invalid and extreme inputs", TestInvalidAndExtremeInputs},
       NamedTest{"long run finite and deterministic",
                 TestLongRunIsFiniteAndDeterministic},
+      NamedTest{"large simulation time advances",
+                TestLargeSimulationTimeStillAdvances},
   };
   for (const NamedTest& test : tests) {
     test.function();
