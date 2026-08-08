@@ -1303,6 +1303,44 @@ void TestMixedUpdateValidationAndLegacyFallback() {
   CheckInvalidArgument([&] { tiny2d::GetMomentOfInertia(invalid_circle); });
 }
 
+void TestLegacyUpdateMatchesMixedUpdateTrajectories() {
+  // Characterization gate: the rectangle-only Update and the mixed Update
+  // with an empty circle vector must produce bit-identical trajectories
+  // across contacts, walls, per-body materials, loads, and damping.
+  std::vector<tiny2d::Rectangle> legacy = {
+      {0.0f, {500.0f, 700.0f}, {}, -0.15f, 0.0f, 600.0f, 20.0f},
+      {2.0f, {300.0f, 200.0f}, {60.0f, -10.0f}, 0.3f, 1.5f, 50.0f, 30.0f},
+      {1.0f, {420.0f, 180.0f}, {-45.0f, 5.0f}, -0.4f, -2.0f, 40.0f, 40.0f},
+      {4.0f, {700.0f, 300.0f}, {-20.0f, 0.0f}, 0.0f, 0.0f, 80.0f, 25.0f, true},
+  };
+  legacy[1].material = {0.6f, 0.5f, 0.3f};
+  legacy[2].charge = 2.5f;
+  legacy[2].linear_damping_rate = 0.2f;
+  legacy[3].material = {0.1f, 0.9f, 0.7f};
+  std::vector<tiny2d::Rectangle> mixed = legacy;
+  std::vector<tiny2d::Circle> no_circles;
+
+  constexpr float kStep = 1.0f / 240.0f;
+  for (int step = 0; step < 5 * 240; ++step) {
+    tiny2d::AddForceAtPoint(
+        legacy[1], {3.0f, -9.0f},
+        {legacy[1].position.x + 10.0f, legacy[1].position.y});
+    tiny2d::AddForceAtPoint(mixed[1], {3.0f, -9.0f},
+                            {mixed[1].position.x + 10.0f, mixed[1].position.y});
+    tiny2d::AddTorque(legacy[2], 40.0f);
+    tiny2d::AddTorque(mixed[2], 40.0f);
+
+    tiny2d::Update(legacy, kStep, 1000.0f, 800.0f, 0.4f, 0.5f, {1.5f, -0.5f},
+                   9.8f);
+    tiny2d::Update(mixed, no_circles, kStep, 1000.0f, 800.0f, 0.4f, 0.5f,
+                   {1.5f, -0.5f}, 9.8f, 20.0f);
+    for (std::size_t i = 0; i < legacy.size(); ++i) {
+      CHECK(SameRectangle(legacy[i], mixed[i]));
+    }
+  }
+  CHECK(no_circles.empty());
+}
+
 void TestRectanglePerBodyMaterialOverride() {
   std::vector<tiny2d::Rectangle> rectangles = {
       {1.0f, {100.0f, 100.0f}, {50.0f, 0.0f}, 0.0f, 0.0f, 40.0f, 40.0f, true},
@@ -1396,6 +1434,7 @@ int main() {
   TestCircleElasticCollisionAndMaterialMixing();
   TestCircleRectangleResponseAndWallFriction();
   TestMixedUpdateValidationAndLegacyFallback();
+  TestLegacyUpdateMatchesMixedUpdateTrajectories();
   TestRectanglePerBodyMaterialOverride();
   TestMixedWorldLongRunIsFiniteAndDeterministic();
   return 0;
