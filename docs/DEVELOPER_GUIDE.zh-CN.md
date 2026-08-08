@@ -1,10 +1,41 @@
-# Tiny2D Engine
+# Tiny2D Engine 开发者指南
 
-> 当前开发版本：V14（未发布） / 最新正式版本：2.0（V10）<br>
+> 当前开发代：V17（未发布） / 最新正式版本：2.0.0（V10）<br>
 > 开发语言：C++17<br>
 > 图形与窗口：SDL2<br>
 > 参数界面：Dear ImGui<br>
 > 构建系统：CMake + vcpkg
+
+## V15–V17 与架构重构补充（2026-08）
+
+以下正文主要写于 V14 时期。此后项目发生了两类变化，正文与本节冲突时
+以本节为准：
+
+**新增实验与引擎能力（V15–V17）**
+
+- V15 ForceLab：`AddForceAtPoint` / `AddTorque` 外力接口，弹簧驱动的
+  刚体平动-转动耦合实验（`Sandbox/force_lab_model.*`）。
+- V16 ContactLab：原生 `Circle` 刚体（实心盘/圆环转动惯量模型）、
+  逐刚体 `CollisionMaterial`（恢复系数取较大值、摩擦取几何平均）、
+  圆-圆与矩形-圆接触（`Sandbox/contact_lab_model.*`）。
+- V17 ImpactLab：可选的圆-圆连续碰撞检测（`Update` 的
+  `enable_circle_circle_ccd` 参数），双通道对照实验
+  （`Sandbox/impact_lab_model.*`）。
+
+**架构重构（保持全部既有行为，8 个测试套件与特征化测试保护）**
+
+- 引擎实现从单一 `tiny2d_engine.cc` 拆分为 `Engine/internal/` 下的
+  body_math、validation、contacts、solver 四个单元；公共头文件
+  `tiny2d_engine.h` 与 API 未变。
+- 两个 `Update` 重载合并为一条积分/求解路径：矩形版是混合版的薄封装
+  （空圆列表 + 旧恢复阈值 20 + CCD 关闭），由
+  `TestLegacyUpdateMatchesMixedUpdateTrajectories` 保证逐位一致。
+- 七个实验的界面循环统一到 `Sandbox/app/lab_shell.h`：事件泵、
+  ImGui 帧、定步长时钟、启动/暂停/错误协议只实现一次，实验通过
+  traits 提供物理绑定与设置/场景/监测面板。
+- 模型选择菜单由 `Sandbox/app/lab_registry.h` 中的常量表驱动，
+  列表放入可滚动子区域，Quit 按钮固定在底部。
+- 各测试套件共用 `tests/test_support.h` 中的 CHECK 断言。
 
 Tiny2D Engine 是一个面向二维刚体和高中、大学普通物理题目的小型物理模拟
 项目。当前开发线提供四个独立入口：V9 斜面实验、V11 RollLab、V13

@@ -270,7 +270,7 @@ void ConstrainBodiesToSurfaces(std::vector<Rectangle>& bodies,
   const float ramp_angle = GetRampAngle(config);
   const float ramp_bottom_x = GetRampBottomX(config);
 
-  // ponytail: This scene uses an ideal guide constraint. Add a general
+  // NOTE: This scene uses an ideal guide constraint. Add a general
   // constraint solver only when other surface shapes need it.
   for (Rectangle& body : bodies) {
     if (body.mass <= 0.0f || !body.fixed_rotation) {

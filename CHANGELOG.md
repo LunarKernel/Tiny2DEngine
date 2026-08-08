@@ -24,6 +24,18 @@ not product versions.
 
 ### Changed
 
+- The engine implementation was split into `Engine/internal/` units
+  (body_math, validation, contacts, solver) behind an unchanged public
+  header, and the two `Update` overloads were unified onto one step path
+  protected by a bit-exact trajectory characterization test.
+- Every lab now runs on a shared application shell
+  (`Sandbox/app/lab_shell.h`); the model-selection menu renders from a lab
+  registry, scrolls when the list outgrows the window, and keeps Quit
+  reachable.
+- All test suites share one assertion harness (`tests/test_support.h`).
+- The root `README.md` is now the concise overview required by
+  `CONTRIBUTING.md`; the full Chinese implementation guide lives only in
+  `docs/DEVELOPER_GUIDE.zh-CN.md` and gained a V15–V17 addendum.
 - Shared fixed-step timing, bounded simulation history, and common UI helpers
   now support all experiment families.
 - Runtime recovery, compiler diagnostics, automated verification, and CI checks

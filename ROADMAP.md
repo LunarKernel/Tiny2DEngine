@@ -28,7 +28,7 @@ recommended, and optional work respectively.
 
 ## 2. Current Baseline
 
-The current development line contains four independent experiment families:
+The current development line contains seven independent experiment families:
 
 - **V9 Incline Laboratory:** blocks, an incline, a floor, collisions,
   friction, a spring, a uniform electric field, SI calibration, telemetry, and
@@ -40,21 +40,34 @@ The current development line contains four independent experiment families:
   preset.
 - **V14 Driven PivotLab:** the V10 physical pendulum extended with damping,
   periodic driving torque, resonance monitoring, and drive power.
+- **V15 ForceLab (delivered):** coupled translation and rotation of a
+  rectangular rigid body driven through a centered or eccentric spring
+  attachment, built on the engine's applied force and torque interface.
+- **V16 ContactLab (delivered):** native circle bodies with disk or hoop
+  inertia, per-body collision materials, and controlled impact and rolling
+  experiments.
+- **V17 ImpactLab (delivered):** conditional circle-circle continuous
+  collision detection compared lane-by-lane against the discrete path. The
+  §8 gate evidence lives in `Engine/tiny2d_engine_test.cc`
+  (`TestSupportedCircleSweepDoesNotTunnel`,
+  `TestFastCircleTravelsBeyondDiameterWithoutTunneling`) and in the V17
+  suite (`TestSupportedGrazingTunnelingAndCcd`) rather than in the V16
+  suite the gate originally named.
 
-The reusable engine currently provides rotating rectangular bodies, SAT
+The reusable engine provides rotating rectangular and circular bodies, SAT
 collision detection, one- and two-point contact manifolds, impulse response,
-friction, restitution, static bodies, fixed rotation, field acceleration, and
-boundary collisions. The Sandbox layer provides model-specific SI units,
-fixed-step clocks, bounded history, parameter interfaces, monitoring, and
+friction, restitution, per-body materials, applied forces and torques,
+optional circle-circle CCD, static bodies, fixed rotation, field
+acceleration, and boundary collisions. The engine implementation is split
+into `Engine/internal/` units (body_math, validation, contacts, solver)
+behind an unchanged public header. The Sandbox layer provides model-specific
+SI units, a shared application shell (`Sandbox/app/lab_shell.h`), a lab
+registry, bounded history, parameter interfaces, monitoring, and
 visualization.
 
 The main limitations relevant to this roadmap are:
 
-- no general external-force or applied-torque interface;
-- no native circle collision body;
-- no per-body material properties;
 - no general joint, rope, or bilateral constraint solver;
-- no continuous collision detection for high-speed motion;
 - no time-series plotting, data export, or experiment file format;
 - no general-purpose contact cache, warm start, or sleeping system.
 
@@ -385,11 +398,10 @@ The project is ready for a formal 3.0 release when:
 
 ## 17. Recommended Next Action
 
-The next feature proposal SHOULD be **V15 ForceLab: Eccentric Spring Rigid
-Body**. It is the smallest experiment that adds a genuinely reusable physics
-capability while connecting the project's existing spring, rigid-body, and
-rotational work.
+V15, V16, and V17 are delivered (see §2). The next feature proposal SHOULD
+be **V18 AtwoodLab: Massive Pulley and Rope Constraints** (§9).
 
-The V15 proposal should define the force and torque API, coordinate and unit
-conventions, the centered analytical reference case, the eccentric coupled
-case, and exact regression tolerances before implementation begins.
+The V18 proposal should define the constraint API, coordinate and unit
+conventions, the analytical Atwood reference case with a massive pulley,
+and exact regression tolerances before implementation begins, keeping the
+one-capability-one-experiment pairing used by V15–V17.
