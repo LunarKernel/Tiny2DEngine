@@ -53,10 +53,10 @@
 ## Continuous update trigger
 
 A user message triggers this section only when, after trimming surrounding
-whitespace, its entire content is `continuous update` (the legacy phrase
-`持续更新` is accepted as an alias). Mentions or quotations do not
-trigger it. The standalone command explicitly authorizes one autonomous
-version iteration, including the branch, commit, and push actions below.
+whitespace, its entire content is `continuous update`. Mentions or
+quotations do not trigger it. The standalone command explicitly authorizes
+one autonomous version iteration, including the branch, commit, and push
+actions below.
 
 - Run the baseline first. Treat every file already dirty at baseline as
   whole-file protected: do not edit, stage, or partially stage it. Choose a
