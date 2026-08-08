@@ -1,28 +1,28 @@
-## 变更目的
+## Purpose
 
-<!-- 说明问题、根因和最小解决方案。 -->
+<!-- Describe the problem, its root cause, and the minimal solution. -->
 
-## 功能契约
+## Feature contract
 
-- 目标：
-- 非目标：
-- 验收条件：
-- 兼容性要求：
+- Goal:
+- Non-goals:
+- Acceptance criteria:
+- Compatibility requirements:
 
-## 审查结论
+## Review status
 
-- [ ] 功能方案已由独立只读审查者确认，无阻断项
-- [ ] 暂存差异已由独立只读审查者确认，无阻断项
+- [ ] The design was confirmed by an independent read-only reviewer with no blocking findings
+- [ ] The staged diff was confirmed by an independent read-only reviewer with no blocking findings
 
-## 验证
+## Verification
 
-- [ ] Debug 构建与测试通过
-- [ ] Release 构建与测试通过
-- [ ] clang-format 与 `git diff --check` 通过
-- [ ] 物理修改包含确定性测试和显式浮点容差（如适用）
-- [ ] UI 修改完成视觉冒烟测试（如适用）
-- [ ] `tools/verify.ps1 -Profile Full` 通过（C++/构建修改）
+- [ ] Debug build and tests pass
+- [ ] Release build and tests pass
+- [ ] clang-format and `git diff --check` pass
+- [ ] Physics changes include deterministic tests with explicit floating-point tolerances (if applicable)
+- [ ] UI changes passed a visual smoke test (if applicable)
+- [ ] `tools/verify.ps1 -Profile Full` passes (C++/build changes)
 
-## 物理约定
+## Physics conventions
 
-<!-- 列出单位、坐标轴、正方向或有效范围的变化；无变化请写“无”。 -->
+<!-- List any change to units, axes, positive directions, or valid ranges; write "None" if unchanged. -->

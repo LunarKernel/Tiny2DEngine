@@ -41,7 +41,8 @@
   `.cc` implementation file. Use the shared `CHECK` harness from
   `tests/test_support.h` instead of a per-file copy.
 - Keep the root `README.md` a concise overview; long-form implementation
-  documentation belongs in `docs/DEVELOPER_GUIDE.zh-CN.md`.
+  documentation belongs in `docs/DEVELOPER_GUIDE.md`. The project
+  is English-only: code, comments, documentation, and UI text.
 - An iteration that delivers a `ROADMAP.md` item must update `ROADMAP.md`
   (baseline, limitations, and next action) and `CHANGELOG.md` in the same
   iteration, so the planning documents never contradict the code.
@@ -52,7 +53,8 @@
 ## Continuous update trigger
 
 A user message triggers this section only when, after trimming surrounding
-whitespace, its entire content is `持续更新`. Mentions or quotations do not
+whitespace, its entire content is `continuous update` (the legacy phrase
+`持续更新` is accepted as an alias). Mentions or quotations do not
 trigger it. The standalone command explicitly authorizes one autonomous
 version iteration, including the branch, commit, and push actions below.
 
@@ -85,7 +87,7 @@ version iteration, including the branch, commit, and push actions below.
   files cannot be preserved, or safe repair attempts cannot pass a gate.
 
 The trigger finishes when the new branch is successfully pushed. Starting
-another version requires another standalone `持续更新` message.
+another version requires another standalone trigger message.
 
 ## Automated iteration
 

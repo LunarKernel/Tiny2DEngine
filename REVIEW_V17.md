@@ -13,7 +13,7 @@ uncommitted V15–V17 changeset.
 
 | Document | Purpose | State |
 | --- | --- | --- |
-| `AGENTS.md` | Agent scope, `持续更新` trigger, automated-iteration workflow, verification contract | Unchanged since `724b466` |
+| `AGENTS.md` | Agent scope, continuous-update trigger, automated-iteration workflow, verification contract | Unchanged since `724b466` |
 | `CONTRIBUTING.md` | Build/test commands, iteration process, **new** version-and-docs policy | Modified (+10) |
 | `ROADMAP.md` | Long-term plan, V15–V20 goals and acceptance criteria | Committed at `724b466`, **not updated for V15–V17** |
 | `CHANGELOG.md` | Keep-a-Changelog history, SemVer vs experiment-generation split | New, untracked |
@@ -142,7 +142,7 @@ Next Action" still recommends **V15 ForceLab** as the next proposal.
 
 This matters more than ordinary doc staleness. `AGENTS.md` instructs the autonomous loop to
 "Prefer an unfinished approved requirement, then a repository roadmap item" — so the next
-`持续更新` trigger reading this file will conclude that V15 is the next thing to build.
+continuous-update trigger reading this file will conclude that V15 is the next thing to build.
 
 **Suggested fix:** move V15/V16/V17 from "planned" to a "Delivered" section, refresh §2's
 baseline and limitation list, and repoint §17 at V18 AtwoodLab. Consider adding a line to
@@ -154,13 +154,14 @@ so the two can never disagree again.
 `cmp` reports the two 46,801-byte files as identical. Meanwhile the *new* `CONTRIBUTING.md`
 section states the intended policy:
 
-> 根目录 `README.md` 保持简洁；详细中文实现说明位于 `docs/DEVELOPER_GUIDE.zh-CN.md`。
+> (translated) The root `README.md` stays concise; the detailed implementation guide lives in `docs/DEVELOPER_GUIDE.zh-CN.md`.
 
 The policy was documented but the split was never performed — the guide was **copied, not
 moved**. Two 46 KB files with no differences will diverge on the first edit to either.
 
-Both copies are also still at V14: `README.md` line 3 reads `当前开发版本：V14（未发布）`, and the
-overview says the project "提供四个独立入口" and names only V9, V11, V13, and V14. There is no
+Both copies are also still at V14: `README.md` line 3 reads "current development
+version: V14 (unreleased)" (translated), the overview says the project
+"provides four independent entries" (translated) and names only V9, V11, V13, and V14. There is no
 mention of ForceLab, ContactLab, or ImpactLab anywhere in either file.
 
 **Suggested fix:** truncate `README.md` to the concise overview the policy calls for (what the

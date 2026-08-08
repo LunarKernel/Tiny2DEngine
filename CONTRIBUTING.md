@@ -1,13 +1,14 @@
-# Tiny2DEngine 贡献指南
+# Contributing to Tiny2DEngine
 
-## 开发环境
+## Development environment
 
-- Visual Studio 2022：在安装器中导入仓库根目录的 `.vsconfig`。
-- CMake 3.24 或更高版本。
-- 从 **Developer PowerShell for VS 2022** 运行下列命令；它会提供 MSVC、
-  Ninja 和 `VCPKG_ROOT`。
+- Visual Studio 2022: import `.vsconfig` from the repository root in the
+  installer.
+- CMake 3.24 or newer.
+- Run the commands below from **Developer PowerShell for VS 2022**; it
+  provides MSVC, Ninja, and `VCPKG_ROOT`.
 
-## 构建与测试
+## Build and test
 
 ```powershell
 cmake --preset msvc-x64
@@ -15,7 +16,7 @@ cmake --build --preset debug
 ctest --preset test-debug
 ```
 
-提交合并请求前还应运行：
+Before opening a pull request, also run:
 
 ```powershell
 cmake --build --preset release
@@ -25,48 +26,65 @@ cmake --build --preset tidy
 git diff --check
 ```
 
-涉及内存、生命周期或容器边界的修改还应运行 `asan` 和 `test-asan` 预设。
+Changes that touch memory, lifetimes, or container boundaries should also run
+the `asan` and `test-asan` presets.
 
-也可以从普通 PowerShell 使用统一验证入口；脚本会自动定位并加载 VS2022：
+Alternatively, use the unified verification entry point from a plain
+PowerShell; the script locates and loads VS2022 itself:
 
 ```powershell
-# 开发中：格式、Debug 构建、Debug 测试、差异检查
+# During development: formatting, Debug build, Debug tests, diff check
 powershell -File tools/verify.ps1 -Profile Fast
 
-# 提交前：再加入 Release、ASan、clang-tidy 和纯 Engine 构建
+# Before committing: adds Release, ASan, clang-tidy, and the engine-only build
 powershell -File tools/verify.ps1 -Profile Full
 ```
 
-## 自动迭代流程
+## Automated iteration process
 
-1. 记录当前 Git 状态和必须保护的既有修改。
-2. 写清功能目标、非目标、验收条件、兼容要求和测试方案。
-3. 由只读审查者审查方案；存在阻断项时不得开始实现。
-4. 最小实现后运行 `Fast` 验证，最终候选运行 `Full` 验证。
-5. 用明确文件列表暂存，禁止 `git add .`，再由只读审查者检查暂存差异。
-6. 只有任务明确授权时才提交；推送、PR、合并和发布分别需要相应授权。
+1. Record the current Git status and any pre-existing changes that must be
+   protected.
+2. Write down the feature goal, non-goals, acceptance criteria, compatibility
+   requirements, and test plan.
+3. Have a read-only reviewer approve the plan; do not start implementing
+   while a blocking finding remains.
+4. After a minimal implementation, run the `Fast` verification; run the
+   `Full` verification on the final candidate.
+5. Stage with an explicit file list — never `git add .` — and have a
+   read-only reviewer inspect the staged diff.
+6. Commit only when the task explicitly authorizes it; push, PR, merge, and
+   release each require their own authorization.
 
-已审查的暂存差异发生任何变化，都会使原审查和验证失效，必须重新执行相关阶段。
+Any change to a reviewed staged diff invalidates the review and the
+verification; the affected stages must run again.
 
-## 版本与文档
+## Versions and documentation
 
-- `vcpkg.json` 中的 `version-semver` 是产品版本的唯一来源；CMake 和应用标题
-  都从该值生成。
-- V9、V14 等编号表示实验代次，不是语义化产品版本。
-- 正式发布时，`CHANGELOG.md` 和 Git 标签 `v<version-semver>` 必须与产品版本
-  一致。
-- 根目录 `README.md` 保持简洁；详细中文实现说明位于
-  `docs/DEVELOPER_GUIDE.zh-CN.md`。
+- `version-semver` in `vcpkg.json` is the single source of the product
+  version; CMake and the application title derive from it.
+- Identifiers such as V9 and V14 name experiment generations, not semantic
+  product versions.
+- On a release, `CHANGELOG.md` and the Git tag `v<version-semver>` must match
+  the product version.
+- Keep the root `README.md` concise; the detailed implementation guide lives
+  in `docs/DEVELOPER_GUIDE.md`.
+- The project is English-only: code, comments, documentation, commit
+  messages, and UI text.
 
-## 代码规范
+## Code standards
 
-- 使用 C++17 和仓库根目录的 `.clang-format`、`.clang-tidy`。
-- 可复用物理代码放在 `Engine/`；界面和具体实验放在 `Sandbox/`。
-- 公共物理 API 必须说明单位、坐标轴、正方向和有效范围。
-- 随机测试固定种子，浮点比较明确写出容差。
-- 不提交 `build/`、`CMakeUserPresets.json` 或编辑器缓存。
+- Use C++17 with the repository's `.clang-format` and `.clang-tidy`.
+- Reusable physics code belongs in `Engine/`; UI and concrete experiments
+  belong in `Sandbox/`.
+- Public physics APIs must document units, axes, positive directions, and
+  valid ranges.
+- Randomized tests use fixed seeds; floating-point comparisons state their
+  tolerances explicitly.
+- Do not commit `build/`, `CMakeUserPresets.json`, or editor caches.
 
-## 合并请求
+## Pull requests
 
-一次合并请求只解决一个清晰问题。说明行为变化、验证命令，以及物理量纲、
-符号约定或 UI 是否发生变化。不要通过关闭测试或警告来让 CI 通过。
+One pull request solves one clearly stated problem. Describe the behavior
+change, the verification commands, and whether physical units, sign
+conventions, or the UI changed. Never make CI pass by disabling tests or
+silencing warnings.

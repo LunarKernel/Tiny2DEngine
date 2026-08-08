@@ -34,8 +34,12 @@ not product versions.
   reachable.
 - All test suites share one assertion harness (`tests/test_support.h`).
 - The root `README.md` is now the concise overview required by
-  `CONTRIBUTING.md`; the full Chinese implementation guide lives only in
-  `docs/DEVELOPER_GUIDE.zh-CN.md` and gained a V15–V17 addendum.
+  `CONTRIBUTING.md`; the implementation guide lives in
+  `docs/DEVELOPER_GUIDE.md`.
+- The project is English-only: the README, contribution guide, PR template,
+  and developer guide were rewritten in English, and the Chinese guide was
+  replaced by `docs/DEVELOPER_GUIDE.md` describing the current
+  architecture.
 - Shared fixed-step timing, bounded simulation history, and common UI helpers
   now support all experiment families.
 - Runtime recovery, compiler diagnostics, automated verification, and CI checks
