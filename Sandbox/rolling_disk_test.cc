@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "rolling_disk_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -27,19 +28,6 @@ using tiny2d::sandbox::StepRollingDisk;
 
 constexpr float kStep = 1.0f / 240.0f;
 constexpr float kTolerance = 0.0001f;
-
-[[noreturn]] void FailCheck(const char* expression, const char* file,
-                            int line) {
-  std::cerr << file << ':' << line << ": CHECK failed: " << expression << '\n';
-  std::abort();
-}
-
-#define CHECK(expression)                         \
-  do {                                            \
-    if (!(expression)) {                          \
-      FailCheck(#expression, __FILE__, __LINE__); \
-    }                                             \
-  } while (false)
 
 bool Near(float actual, float expected, float tolerance = kTolerance) {
   return std::abs(actual - expected) <=

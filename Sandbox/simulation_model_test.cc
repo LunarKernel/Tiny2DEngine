@@ -9,22 +9,10 @@
 #include "fixed_step_clock.h"
 #include "incline_spring_model.h"
 #include "simulation_history.h"
+#include "test_support.h"
 
 namespace tiny2d::sandbox::incline_spring {
 namespace {
-
-std::size_t check_count = 0;
-
-void Check(bool condition, const char* expression, const char* file, int line) {
-  ++check_count;
-  if (!condition) {
-    std::cerr << file << ':' << line << ": CHECK failed: " << expression
-              << '\n';
-    std::exit(1);
-  }
-}
-
-#define CHECK(expression) Check((expression), #expression, __FILE__, __LINE__)
 
 constexpr float kTestTolerance = 0.001f;
 
@@ -884,7 +872,8 @@ int RunTests() {
     test.function();
     std::cout << "[PASS] " << test.name << '\n';
   }
-  std::cout << tests.size() << " tests, " << check_count << " checks passed\n";
+  std::cout << tests.size() << " tests, " << tiny2d::test::CheckCount()
+            << " checks passed\n";
   return 0;
 }
 

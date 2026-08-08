@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "force_lab_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -25,19 +26,6 @@ using tiny2d::sandbox::MakeCenteredReferenceConfig;
 using tiny2d::sandbox::MakeEccentricDemoConfig;
 using tiny2d::sandbox::MakeInitialForceLabState;
 using tiny2d::sandbox::StepForceLab;
-
-std::size_t check_count = 0;
-
-void Check(bool condition, const char* expression, const char* file, int line) {
-  ++check_count;
-  if (!condition) {
-    std::cerr << file << ':' << line << ": CHECK failed: " << expression
-              << '\n';
-    std::exit(1);
-  }
-}
-
-#define CHECK(expression) Check((expression), #expression, __FILE__, __LINE__)
 
 bool Near(double actual, double expected, double tolerance = 0.00001) {
   return std::abs(actual - expected) <=
@@ -388,6 +376,7 @@ int main() {
     test.function();
     std::cout << "[PASS] " << test.name << '\n';
   }
-  std::cout << tests.size() << " tests, " << check_count << " checks passed\n";
+  std::cout << tests.size() << " tests, " << tiny2d::test::CheckCount()
+            << " checks passed\n";
   return 0;
 }

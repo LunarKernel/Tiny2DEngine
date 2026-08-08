@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "lorentz_particle_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -25,19 +26,6 @@ using tiny2d::sandbox::StepLorentzParticle;
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kTolerance = 1e-10;
-
-[[noreturn]] void FailCheck(const char* expression, const char* file,
-                            int line) {
-  std::cerr << file << ':' << line << ": CHECK failed: " << expression << '\n';
-  std::abort();
-}
-
-#define CHECK(expression)                         \
-  do {                                            \
-    if (!(expression)) {                          \
-      FailCheck(#expression, __FILE__, __LINE__); \
-    }                                             \
-  } while (false)
 
 bool Near(double actual, double expected, double tolerance = kTolerance) {
   return std::abs(actual - expected) <=

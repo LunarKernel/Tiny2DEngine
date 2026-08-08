@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "rotation_pendulum_model.h"
+#include "test_support.h"
 
 namespace {
 
@@ -35,19 +36,6 @@ using tiny2d::sandbox::PendulumConfig;
 using tiny2d::sandbox::PendulumDerived;
 using tiny2d::sandbox::PendulumState;
 using tiny2d::sandbox::StepPendulum;
-
-std::size_t check_count = 0;
-
-void Check(bool condition, const char* expression, const char* file, int line) {
-  ++check_count;
-  if (!condition) {
-    std::cerr << file << ':' << line << ": CHECK failed: " << expression
-              << '\n';
-    std::exit(1);
-  }
-}
-
-#define CHECK(expression) Check((expression), #expression, __FILE__, __LINE__)
 
 constexpr float kTestTolerance = 0.0001f;
 
@@ -682,6 +670,7 @@ int main() {
     test.function();
     std::cout << "[PASS] " << test.name << '\n';
   }
-  std::cout << tests.size() << " tests, " << check_count << " checks passed\n";
+  std::cout << tests.size() << " tests, " << tiny2d::test::CheckCount()
+            << " checks passed\n";
   return 0;
 }

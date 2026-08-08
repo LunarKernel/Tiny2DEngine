@@ -103,11 +103,17 @@ if(TINY2D_BUILD_SANDBOX)
 endif()
 
 if(BUILD_TESTING)
+  add_library(Tiny2DTestSupport INTERFACE)
+  target_include_directories(Tiny2DTestSupport INTERFACE
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests
+  )
+
   add_executable(Tiny2DEngineTests
       Engine/tiny2d_engine_test.cc
   )
 
-  target_link_libraries(Tiny2DEngineTests PRIVATE Tiny2DEngine)
+  target_link_libraries(Tiny2DEngineTests PRIVATE Tiny2DEngine
+                                                  Tiny2DTestSupport)
   tiny2d_enable_warnings(Tiny2DEngineTests)
 
   add_test(NAME Tiny2DEngineTests COMMAND Tiny2DEngineTests)
@@ -117,7 +123,8 @@ if(BUILD_TESTING)
       Sandbox/simulation_model_test.cc
   )
 
-  target_link_libraries(Tiny2DSimulationTests PRIVATE Tiny2DSimulationModels)
+  target_link_libraries(Tiny2DSimulationTests PRIVATE Tiny2DSimulationModels
+                                                      Tiny2DTestSupport)
   tiny2d_enable_warnings(Tiny2DSimulationTests)
 
   add_test(NAME Tiny2DSimulationTests COMMAND Tiny2DSimulationTests)
@@ -128,7 +135,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(Tiny2DRotationPendulumTests
-      PRIVATE Tiny2DSimulationModels
+      PRIVATE Tiny2DSimulationModels Tiny2DTestSupport
   )
   tiny2d_enable_warnings(Tiny2DRotationPendulumTests)
 
@@ -139,7 +146,8 @@ if(BUILD_TESTING)
       Sandbox/rolling_disk_test.cc
   )
 
-  target_link_libraries(Tiny2DRollingDiskTests PRIVATE Tiny2DSimulationModels)
+  target_link_libraries(Tiny2DRollingDiskTests PRIVATE Tiny2DSimulationModels
+                                                       Tiny2DTestSupport)
   tiny2d_enable_warnings(Tiny2DRollingDiskTests)
 
   add_test(NAME Tiny2DRollingDiskTests COMMAND Tiny2DRollingDiskTests)
@@ -150,7 +158,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(Tiny2DLorentzParticleTests
-      PRIVATE Tiny2DSimulationModels
+      PRIVATE Tiny2DSimulationModels Tiny2DTestSupport
   )
   tiny2d_enable_warnings(Tiny2DLorentzParticleTests)
 
@@ -161,7 +169,8 @@ if(BUILD_TESTING)
       Sandbox/force_lab_test.cc
   )
 
-  target_link_libraries(Tiny2DForceLabTests PRIVATE Tiny2DSimulationModels)
+  target_link_libraries(Tiny2DForceLabTests PRIVATE Tiny2DSimulationModels
+                                                    Tiny2DTestSupport)
   tiny2d_enable_warnings(Tiny2DForceLabTests)
 
   add_test(NAME Tiny2DForceLabTests COMMAND Tiny2DForceLabTests)
@@ -171,7 +180,8 @@ if(BUILD_TESTING)
       Sandbox/contact_lab_test.cc
   )
 
-  target_link_libraries(Tiny2DContactLabTests PRIVATE Tiny2DSimulationModels)
+  target_link_libraries(Tiny2DContactLabTests PRIVATE Tiny2DSimulationModels
+                                                      Tiny2DTestSupport)
   tiny2d_enable_warnings(Tiny2DContactLabTests)
 
   add_test(NAME Tiny2DContactLabTests COMMAND Tiny2DContactLabTests)
@@ -181,7 +191,8 @@ if(BUILD_TESTING)
       Sandbox/impact_lab_test.cc
   )
 
-  target_link_libraries(Tiny2DImpactLabTests PRIVATE Tiny2DSimulationModels)
+  target_link_libraries(Tiny2DImpactLabTests PRIVATE Tiny2DSimulationModels
+                                                     Tiny2DTestSupport)
   tiny2d_enable_warnings(Tiny2DImpactLabTests)
 
   add_test(NAME Tiny2DImpactLabTests COMMAND Tiny2DImpactLabTests)

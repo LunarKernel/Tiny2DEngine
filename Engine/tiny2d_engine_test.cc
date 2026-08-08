@@ -11,22 +11,11 @@
 #include <stdexcept>
 #include <vector>
 
+#include "test_support.h"
+
 namespace {
 
 constexpr float kTolerance = 0.001f;
-
-[[noreturn]] void FailCheck(const char* expression, const char* file,
-                            int line) {
-  std::cerr << file << ':' << line << ": CHECK failed: " << expression << '\n';
-  std::abort();
-}
-
-#define CHECK(expression)                         \
-  do {                                            \
-    if (!(expression)) {                          \
-      FailCheck(#expression, __FILE__, __LINE__); \
-    }                                             \
-  } while (false)
 
 bool NearlyEqual(float a, float b, float tolerance = kTolerance) {
   return std::abs(a - b) <=
@@ -147,7 +136,8 @@ void CheckInvalidArgument(Function function) {
   } catch (const std::invalid_argument&) {
     threw = true;
   } catch (...) {
-    FailCheck("expected std::invalid_argument", __FILE__, __LINE__);
+    ::tiny2d::test::Check(false, "expected std::invalid_argument", __FILE__,
+                          __LINE__);
   }
   CHECK(threw);
 }
