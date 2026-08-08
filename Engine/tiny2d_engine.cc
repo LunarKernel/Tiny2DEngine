@@ -206,161 +206,17 @@ bool IsColliding(const Circle& circle, const Rectangle& rectangle) {
   return IsColliding(rectangle, circle);
 }
 
+// The rectangle-only overload delegates to the mixed-world step with no
+// circles, CCD disabled, and the legacy restitution velocity threshold, so
+// there is exactly one integration and solver path. Equivalence is protected
+// by TestLegacyUpdateMatchesMixedUpdateTrajectories.
 void Update(std::vector<Rectangle>& squares, float delta_time, float area_width,
             float area_height, float restitution, float friction,
             Vec2 electric_field, float gravity) {
-  Require(std::isfinite(delta_time) && delta_time >= 0.0f,
-          "Delta time must be finite and non-negative.");
-  Require(std::isfinite(area_width) && std::isfinite(area_height) &&
-              area_width > 0.0f && area_height > 0.0f,
-          "Simulation area dimensions must be finite and positive.");
-  Require(
-      std::isfinite(restitution) && restitution >= 0.0f && restitution <= 1.0f,
-      "Restitution must be in the range [0, 1].");
-  Require(std::isfinite(friction) && friction >= 0.0f,
-          "Friction must be finite and non-negative.");
-  Require(IsFinite(electric_field) && std::isfinite(gravity),
-          "Electric field and gravity must contain only finite values.");
-
-  for (const Rectangle& square : squares) {
-    ValidateRectangle(square);
-    if (square.mass == 0.0f) {
-      continue;
-    }
-    Require(FitsInArea(square, area_width, area_height),
-            "A dynamic rectangle cannot fit inside the simulation area.");
-
-    const double field_acceleration_x =
-        static_cast<double>(electric_field.x) * square.charge / square.mass;
-    const double field_acceleration_y =
-        static_cast<double>(gravity) +
-        static_cast<double>(electric_field.y) * square.charge / square.mass;
-    RequireFloatResult(field_acceleration_x,
-                       "Electric acceleration exceeds the float range.");
-    RequireFloatResult(field_acceleration_y,
-                       "Combined acceleration exceeds the float range.");
-    if (delta_time == 0.0f) {
-      continue;
-    }
-
-    const double force_acceleration_x =
-        static_cast<double>(square.applied_force.x) / square.mass;
-    const double force_acceleration_y =
-        static_cast<double>(square.applied_force.y) / square.mass;
-    const double acceleration_x = field_acceleration_x + force_acceleration_x;
-    const double acceleration_y = field_acceleration_y + force_acceleration_y;
-    const double velocity_x = square.velocity.x + acceleration_x * delta_time;
-    const double velocity_y = square.velocity.y + acceleration_y * delta_time;
-    RequireFloatResult(force_acceleration_x,
-                       "Applied horizontal acceleration exceeds float range.");
-    RequireFloatResult(force_acceleration_y,
-                       "Applied vertical acceleration exceeds float range.");
-    RequireFloatResult(acceleration_x,
-                       "Total horizontal acceleration exceeds float range.");
-    RequireFloatResult(acceleration_y,
-                       "Total vertical acceleration exceeds float range.");
-    RequireFloatResult(velocity_x,
-                       "Integrated horizontal velocity exceeds float range.");
-    RequireFloatResult(velocity_y,
-                       "Integrated vertical velocity exceeds float range.");
-    RequireFloatResult(square.position.x + velocity_x * delta_time,
-                       "Integrated horizontal position exceeds float range.");
-    RequireFloatResult(square.position.y + velocity_y * delta_time,
-                       "Integrated vertical position exceeds float range.");
-    if (!square.fixed_rotation) {
-      const double angular_acceleration =
-          static_cast<double>(square.applied_torque) /
-          MomentOfInertiaUnchecked(square);
-      const double angular_velocity =
-          square.angular_velocity + angular_acceleration * delta_time;
-      RequireFloatResult(
-          angular_acceleration,
-          "Applied angular acceleration exceeds the float range.");
-      RequireFloatResult(angular_velocity,
-                         "Integrated angular velocity exceeds float range.");
-      RequireFloatResult(square.angle + angular_velocity * delta_time,
-                         "Integrated angle exceeds float range.");
-    }
-  }
-
-  for (Rectangle& square : squares) {
-    if (InverseMass(square) == 0.0f) {
-      continue;
-    }
-    if (delta_time > 0.0f) {
-      if (square.applied_force.x == 0.0f && square.applied_force.y == 0.0f) {
-        square.velocity =
-            Add(square.velocity, Multiply(GetLinearAccelerationUnchecked(
-                                              square, electric_field, gravity),
-                                          delta_time));
-      } else {
-        const double acceleration_x =
-            static_cast<double>(electric_field.x) * square.charge /
-                square.mass +
-            static_cast<double>(square.applied_force.x) / square.mass;
-        const double acceleration_y =
-            static_cast<double>(gravity) +
-            static_cast<double>(electric_field.y) * square.charge /
-                square.mass +
-            static_cast<double>(square.applied_force.y) / square.mass;
-        square.velocity = {
-            static_cast<float>(square.velocity.x + acceleration_x * delta_time),
-            static_cast<float>(square.velocity.y +
-                               acceleration_y * delta_time)};
-      }
-      if (square.linear_damping_rate > 0.0f) {
-        square.velocity =
-            Multiply(square.velocity,
-                     std::exp(-square.linear_damping_rate * delta_time));
-      }
-    }
-    if (square.fixed_rotation) {
-      square.angular_velocity = 0.0f;
-    } else if (delta_time > 0.0f) {
-      if (square.applied_torque != 0.0f) {
-        square.angular_velocity = static_cast<float>(
-            square.angular_velocity +
-            static_cast<double>(square.applied_torque) /
-                MomentOfInertiaUnchecked(square) * delta_time);
-      }
-      square.angular_velocity *=
-          std::exp(-square.angular_damping_rate * delta_time);
-    }
-    square.position =
-        Add(square.position, Multiply(square.velocity, delta_time));
-    if (!square.fixed_rotation) {
-      square.angle = std::remainder(
-          square.angle + square.angular_velocity * delta_time, kTwoPi);
-    }
-  }
-
-  for (int iteration = 0; iteration < kSolverIterations; ++iteration) {
-    const bool allow_restitution = iteration == 0;
-    for (std::size_t i = 0; i < squares.size(); ++i) {
-      for (std::size_t j = i + 1; j < squares.size(); ++j) {
-        const std::optional<ContactManifold> contact =
-            FindContact(squares[i], squares[j]);
-        if (contact.has_value()) {
-          ResolveContact(squares[i], squares[j], *contact,
-                         MixMaterials(squares[i].material, squares[j].material,
-                                      restitution, friction),
-                         allow_restitution,
-                         kLegacyRestitutionVelocityThreshold);
-        }
-      }
-    }
-
-    for (Rectangle& square : squares) {
-      ResolveWindowCollision(square, area_width, area_height, restitution,
-                             friction, allow_restitution,
-                             kLegacyRestitutionVelocityThreshold);
-    }
-  }
-
-  for (Rectangle& square : squares) {
-    square.applied_force = {};
-    square.applied_torque = 0.0f;
-  }
+  std::vector<Circle> no_circles;
+  Update(squares, no_circles, delta_time, area_width, area_height, restitution,
+         friction, electric_field, gravity, kLegacyRestitutionVelocityThreshold,
+         false);
 }
 
 void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
