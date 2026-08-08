@@ -17,10 +17,6 @@ constexpr float kSurfaceWidthM = 22.0f;
 constexpr float kSurfaceHeightM = 1.0f;
 constexpr float kSurfaceTopM = kSurfacePositionM.y - kSurfaceHeightM * 0.5f;
 
-bool IsFinite(Vec2 value) {
-  return std::isfinite(value.x) && std::isfinite(value.y);
-}
-
 bool IsKnownMode(ContactLabMode mode) {
   switch (mode) {
     case ContactLabMode::kElasticImpact:

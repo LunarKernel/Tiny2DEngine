@@ -37,10 +37,6 @@ struct AnalyticalReference {
   Vec2 position_b;
 };
 
-bool IsFinite(Vec2 value) {
-  return std::isfinite(value.x) && std::isfinite(value.y);
-}
-
 double Dot(Vec2 a, Vec2 b) {
   return static_cast<double>(a.x) * b.x + static_cast<double>(a.y) * b.y;
 }
