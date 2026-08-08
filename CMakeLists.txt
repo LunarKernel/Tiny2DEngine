@@ -47,6 +47,9 @@ if(TINY2D_BUILD_SANDBOX)
 endif()
 
 add_library(Tiny2DEngine STATIC
+    Engine/internal/contacts.cc
+    Engine/internal/solver.cc
+    Engine/internal/validation.cc
     Engine/tiny2d_engine.cc
 )
 
