@@ -4,257 +4,219 @@
 #include <imgui_impl_sdlrenderer2.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <exception>
+#include <optional>
 
-#include "simulations.h"
+#include "app/lab_registry.h"
+#include "app/lab_shell.h"
 
 namespace {
 
 constexpr int kWindowWidth = 1200;
 constexpr int kWindowHeight = 800;
 
-enum class ModelChoice {
-  kNone,
-  kImpactLab,
-  kContactLab,
-  kForceLab,
-  kInclineSpring,
-  kRotationPendulum,
-  kRollingDisk,
-  kLorentzParticle,
-  kQuit,
-};
-
 void ShowError(const char* message) {
   SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Tiny2D Engine", message,
                            nullptr);
 }
 
-ModelChoice ChooseModel(SDL_Renderer* renderer) {
-  if (renderer == nullptr) {
-    return ModelChoice::kQuit;
-  }
+// Owns SDL and ImGui setup and tears down whatever succeeded, so every early
+// return in main takes the same cleanup path.
+class AppContext {
+ public:
+  AppContext() = default;
+  AppContext(const AppContext&) = delete;
+  AppContext& operator=(const AppContext&) = delete;
 
-  while (true) {
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT) {
-        return ModelChoice::kQuit;
-      }
+  ~AppContext() {
+    if (imgui_renderer_ready_) {
+      ImGui_ImplSDLRenderer2_Shutdown();
     }
-
-    ImGui_ImplSDLRenderer2_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
-
-    const ImVec2 display_size = ImGui::GetIO().DisplaySize;
-    ImGui::SetNextWindowPos({0.0f, 0.0f});
-    ImGui::SetNextWindowSize(display_size);
-    constexpr ImGuiWindowFlags kWindowFlags = ImGuiWindowFlags_NoDecoration |
-                                              ImGuiWindowFlags_NoMove |
-                                              ImGuiWindowFlags_NoSavedSettings;
-    ImGui::Begin("Tiny2D model selection", nullptr, kWindowFlags);
-
-    constexpr float kPanelWidth = 720.0f;
-    const float panel_width = std::min(kPanelWidth, display_size.x - 48.0f);
-    ImGui::SetCursorPosX(
-        std::max(24.0f, (display_size.x - panel_width) * 0.5f));
-    ImGui::SetCursorPosY(25.0f);
-    ImGui::BeginGroup();
-    ImGui::TextColored({0.35f, 0.75f, 1.0f, 1.0f}, "Tiny2D Physics Lab");
-    ImGui::TextUnformatted("Choose a simulation model");
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ModelChoice choice = ModelChoice::kNone;
-    ImGui::TextUnformatted("V17 ImpactLab: Continuous Circle Impacts");
-    ImGui::TextWrapped(
-        "Compare discrete collision detection with circle-circle time of "
-        "impact for grazing and diameter-skipping motion.");
-    constexpr float kModelButtonHeight = 36.0f;
-    if (ImGui::Button("Open V17 ImpactLab",
-                      {panel_width, kModelButtonHeight})) {
-      choice = ModelChoice::kImpactLab;
+    if (imgui_backend_ready_) {
+      ImGui_ImplSDL2_Shutdown();
     }
-
-    ImGui::Spacing();
-    ImGui::TextUnformatted("V16 ContactLab: Circle Impacts and Rolling");
-    ImGui::TextWrapped(
-        "Native circle bodies, material-aware impacts, momentum and energy "
-        "checks, and disk or hoop rolling contact.");
-    if (ImGui::Button("Open V16 ContactLab",
-                      {panel_width, kModelButtonHeight})) {
-      choice = ModelChoice::kContactLab;
+    if (imgui_context_ready_) {
+      ImGui::DestroyContext();
     }
-
-    ImGui::Spacing();
-    ImGui::TextUnformatted("V15 ForceLab: Eccentric Spring Rigid Body");
-    ImGui::TextWrapped(
-        "A rectangular rigid body coupled to a fixed spring through an "
-        "adjustable center or eccentric attachment point.");
-    if (ImGui::Button("Open V15 ForceLab", {panel_width, kModelButtonHeight})) {
-      choice = ModelChoice::kForceLab;
+    if (renderer_ != nullptr) {
+      SDL_DestroyRenderer(renderer_);
     }
-
-    ImGui::Spacing();
-    ImGui::TextUnformatted("V9 Stable: Incline / Spring / Electric Field");
-    ImGui::TextWrapped(
-        "Two blocks, ramp, floor, spring, electric field, SI telemetry, and "
-        "history.");
-    if (ImGui::Button("Open V9 incline laboratory",
-                      {panel_width, kModelButtonHeight})) {
-      choice = ModelChoice::kInclineSpring;
+    if (window_ != nullptr) {
+      SDL_DestroyWindow(window_);
     }
-
-    ImGui::Spacing();
-    ImGui::TextUnformatted("V14 Driven PivotLab: Forced Damped Pendulum");
-    ImGui::TextWrapped(
-        "Extends V10 with a periodic torque, resonance preset, live drive "
-        "power, and the original no-drive behavior.");
-    if (ImGui::Button("Open V14 Driven PivotLab",
-                      {panel_width, kModelButtonHeight})) {
-      choice = ModelChoice::kRotationPendulum;
-    }
-
-    ImGui::Spacing();
-    ImGui::TextUnformatted("V11 RollLab: Sliding / Rolling Transition");
-    ImGui::TextWrapped(
-        "A disk or hoop sliding into pure rolling under friction and uniform "
-        "electric and magnetic fields.");
-    if (ImGui::Button("Open V11 RollLab", {panel_width, kModelButtonHeight})) {
-      choice = ModelChoice::kRollingDisk;
-    }
-
-    ImGui::Spacing();
-    ImGui::TextUnformatted("V13 Gravito-Orbit: Gravity in Uniform Fields");
-    ImGui::TextWrapped(
-        "Extends V12 exact charged-particle motion with uniform gravity, "
-        "potential energy, and combined-force drift.");
-    if (ImGui::Button("Open V13 Gravito-Orbit",
-                      {panel_width, kModelButtonHeight})) {
-      choice = ModelChoice::kLorentzParticle;
-    }
-
-    ImGui::Spacing();
-    if (ImGui::Button("Quit", {panel_width, 42.0f})) {
-      choice = ModelChoice::kQuit;
-    }
-    ImGui::EndGroup();
-    ImGui::End();
-
-    ImGui::Render();
-    SDL_SetRenderDrawColor(renderer, 18, 20, 24, 255);
-    SDL_RenderClear(renderer);
-    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
-    SDL_RenderPresent(renderer);
-    if (choice != ModelChoice::kNone) {
-      return choice;
+    if (sdl_ready_) {
+      SDL_Quit();
     }
   }
+
+  // Returns nullptr on success, otherwise a user-facing error message.
+  const char* Initialize() {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) < 0) {
+      return "SDL could not start.";
+    }
+    sdl_ready_ = true;
+
+    window_ = SDL_CreateWindow("Tiny2D Engine " TINY2D_PRODUCT_VERSION,
+                               SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                               kWindowWidth, kWindowHeight, SDL_WINDOW_SHOWN);
+    if (window_ == nullptr) {
+      return "The application window could not be created.";
+    }
+
+    renderer_ = SDL_CreateRenderer(
+        window_, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (renderer_ == nullptr) {
+      return "The graphics renderer could not be created.";
+    }
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    imgui_context_ready_ = true;
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.IniFilename = nullptr;
+#ifdef _WIN32
+    // NOTE: Use the native UI font; bundle one only when identical
+    // cross-platform typography becomes a requirement.
+    if (io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf", 16.0f) ==
+        nullptr) {
+      io.Fonts->AddFontDefault();
+    }
+#else
+    io.Fonts->AddFontDefault();
+#endif
+    ImGui::StyleColorsDark();
+    ImGui::GetStyle().FrameRounding = 5.0f;
+    ImGui::GetStyle().GrabRounding = 5.0f;
+
+    if (!ImGui_ImplSDL2_InitForSDLRenderer(window_, renderer_)) {
+      return "The settings interface could not be initialized.";
+    }
+    imgui_backend_ready_ = true;
+    if (!ImGui_ImplSDLRenderer2_Init(renderer_)) {
+      return "The settings interface renderer could not be initialized.";
+    }
+    imgui_renderer_ready_ = true;
+    return nullptr;
+  }
+
+  SDL_Renderer* renderer() const { return renderer_; }
+
+ private:
+  bool sdl_ready_ = false;
+  SDL_Window* window_ = nullptr;
+  SDL_Renderer* renderer_ = nullptr;
+  bool imgui_context_ready_ = false;
+  bool imgui_backend_ready_ = false;
+  bool imgui_renderer_ready_ = false;
+};
+
+// Draws the selection menu from the lab registry. Returns the chosen lab
+// index, or std::nullopt when the user quit. The lab list scrolls inside a
+// child region so every entry and the Quit button stay reachable no matter
+// how many labs are installed.
+std::optional<std::size_t> ChooseLab(SDL_Renderer* renderer) {
+  namespace shell = tiny2d::sandbox::shell;
+  std::optional<std::size_t> chosen;
+  const tiny2d::sandbox::SimulationResult result = shell::RunFrameLoop(
+      renderer,
+      [&](const shell::FrameInput& input)
+          -> std::optional<tiny2d::sandbox::SimulationResult> {
+        if (input.quit_requested) {
+          return tiny2d::sandbox::SimulationResult::kQuit;
+        }
+
+        const ImVec2 display_size = ImGui::GetIO().DisplaySize;
+        ImGui::SetNextWindowPos({0.0f, 0.0f});
+        ImGui::SetNextWindowSize(display_size);
+        constexpr ImGuiWindowFlags kWindowFlags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoSavedSettings;
+        ImGui::Begin("Tiny2D model selection", nullptr, kWindowFlags);
+
+        constexpr float kPanelWidth = 720.0f;
+        const float panel_width = std::min(kPanelWidth, display_size.x - 48.0f);
+        const float panel_left =
+            std::max(24.0f, (display_size.x - panel_width) * 0.5f);
+        ImGui::SetCursorPosX(panel_left);
+        ImGui::SetCursorPosY(25.0f);
+        ImGui::BeginGroup();
+        ImGui::TextColored({0.35f, 0.75f, 1.0f, 1.0f}, "Tiny2D Physics Lab");
+        ImGui::TextUnformatted("Choose a simulation model");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::EndGroup();
+
+        constexpr float kQuitAreaHeight = 58.0f;
+        ImGui::SetCursorPosX(panel_left);
+        ImGui::BeginChild(
+            "lab_list",
+            {panel_width,
+             std::max(ImGui::GetContentRegionAvail().y - kQuitAreaHeight,
+                      100.0f)});
+        constexpr float kModelButtonHeight = 36.0f;
+        const float list_width = ImGui::GetContentRegionAvail().x;
+        for (std::size_t i = 0; i < tiny2d::sandbox::kLabs.size(); ++i) {
+          const tiny2d::sandbox::LabInfo& lab = tiny2d::sandbox::kLabs[i];
+          if (i != 0) {
+            ImGui::Spacing();
+          }
+          ImGui::TextUnformatted(lab.title);
+          ImGui::TextWrapped("%s", lab.description);
+          if (ImGui::Button(lab.button_label,
+                            {list_width, kModelButtonHeight})) {
+            chosen = i;
+          }
+        }
+        ImGui::EndChild();
+
+        ImGui::Spacing();
+        ImGui::SetCursorPosX(panel_left);
+        const bool quit = ImGui::Button("Quit", {panel_width, 42.0f});
+        ImGui::End();
+
+        if (chosen.has_value()) {
+          return tiny2d::sandbox::SimulationResult::kBackToSelection;
+        }
+        if (quit) {
+          return tiny2d::sandbox::SimulationResult::kQuit;
+        }
+        return std::nullopt;
+      });
+  if (result == tiny2d::sandbox::SimulationResult::kQuit) {
+    chosen.reset();
+  }
+  return chosen;
 }
 
 }  // namespace
 
 int main(int, char*[]) {
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) < 0) {
-    ShowError("SDL could not start.");
-    return 1;
-  }
-
-  SDL_Window* window = SDL_CreateWindow(
-      "Tiny2D Engine " TINY2D_PRODUCT_VERSION " | V17 Development",
-      SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, kWindowWidth,
-      kWindowHeight, SDL_WINDOW_SHOWN);
-  if (window == nullptr) {
-    ShowError("The application window could not be created.");
-    SDL_Quit();
-    return 1;
-  }
-
-  SDL_Renderer* renderer = SDL_CreateRenderer(
-      window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-  if (renderer == nullptr) {
-    ShowError("The graphics renderer could not be created.");
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    return 1;
-  }
-
-  IMGUI_CHECKVERSION();
-  ImGui::CreateContext();
-  ImGuiIO& io = ImGui::GetIO();
-  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  io.IniFilename = nullptr;
-#ifdef _WIN32
-  // ponytail: Use the native UI font; bundle one only when identical
-  // cross-platform typography becomes a requirement.
-  if (io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf", 16.0f) ==
-      nullptr) {
-    io.Fonts->AddFontDefault();
-  }
-#else
-  io.Fonts->AddFontDefault();
-#endif
-  ImGui::StyleColorsDark();
-  ImGui::GetStyle().FrameRounding = 5.0f;
-  ImGui::GetStyle().GrabRounding = 5.0f;
-
-  if (!ImGui_ImplSDL2_InitForSDLRenderer(window, renderer)) {
-    ShowError("The settings interface could not be initialized.");
-    ImGui::DestroyContext();
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    return 1;
-  }
-  if (!ImGui_ImplSDLRenderer2_Init(renderer)) {
-    ShowError("The settings interface renderer could not be initialized.");
-    ImGui_ImplSDL2_Shutdown();
-    ImGui::DestroyContext();
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
+  AppContext app;
+  if (const char* error = app.Initialize(); error != nullptr) {
+    ShowError(error);
     return 1;
   }
 
   int exit_code = 0;
   try {
-    bool running = true;
-    while (running) {
-      const ModelChoice choice = ChooseModel(renderer);
-      tiny2d::sandbox::SimulationResult result =
-          tiny2d::sandbox::SimulationResult::kQuit;
-      if (choice == ModelChoice::kImpactLab) {
-        result = tiny2d::sandbox::RunImpactLabSimulation(renderer);
-      } else if (choice == ModelChoice::kContactLab) {
-        result = tiny2d::sandbox::RunContactLabSimulation(renderer);
-      } else if (choice == ModelChoice::kForceLab) {
-        result = tiny2d::sandbox::RunForceLabSimulation(renderer);
-      } else if (choice == ModelChoice::kInclineSpring) {
-        result = tiny2d::sandbox::RunInclineSpringSimulation(renderer);
-      } else if (choice == ModelChoice::kRotationPendulum) {
-        result = tiny2d::sandbox::RunRotationPendulumSimulation(renderer);
-      } else if (choice == ModelChoice::kRollingDisk) {
-        result = tiny2d::sandbox::RunRollingDiskSimulation(renderer);
-      } else if (choice == ModelChoice::kLorentzParticle) {
-        result = tiny2d::sandbox::RunLorentzParticleSimulation(renderer);
-      } else {
+    while (true) {
+      const std::optional<std::size_t> choice = ChooseLab(app.renderer());
+      if (!choice.has_value()) {
         break;
       }
-      running = result != tiny2d::sandbox::SimulationResult::kQuit;
+      const tiny2d::sandbox::SimulationResult result =
+          tiny2d::sandbox::kLabs[*choice].run(app.renderer());
+      if (result == tiny2d::sandbox::SimulationResult::kQuit) {
+        break;
+      }
     }
   } catch (const std::exception& error) {
     ShowError(error.what());
     exit_code = 1;
   }
 
-  ImGui_ImplSDLRenderer2_Shutdown();
-  ImGui_ImplSDL2_Shutdown();
-  ImGui::DestroyContext();
-  SDL_DestroyRenderer(renderer);
-  SDL_DestroyWindow(window);
-  SDL_Quit();
   return exit_code;
 }
