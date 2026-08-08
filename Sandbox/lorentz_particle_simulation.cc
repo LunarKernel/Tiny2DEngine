@@ -470,7 +470,8 @@ struct LorentzLabTraits {
   using Config = tiny2d::sandbox::LorentzParticleConfig;
   using State = tiny2d::sandbox::LorentzParticleState;
   using Status = tiny2d::sandbox::LorentzParticleStatus;
-  static constexpr float kPhysicsStep = tiny2d::sandbox::kLorentzPhysicsStep;
+  // Double, matching the model's double-precision step contract.
+  static constexpr double kPhysicsStep = tiny2d::sandbox::kLorentzPhysicsStep;
   static constexpr double kMaximumFrameTime = 0.25;
   static constexpr const char* kInvalidHistoryTimeMessage =
       "The particle model produced an invalid history time.";

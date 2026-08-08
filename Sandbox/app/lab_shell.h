@@ -86,7 +86,7 @@ SimulationResult RunFrameLoop(SDL_Renderer* renderer, FrameFunction frame) {
 
 // Standard continuous-lab lifecycle. Traits must provide:
 //   types Config, State (State has a double time_seconds member);
-//   constants kPhysicsStep (float), kMaximumFrameTime (double),
+//   constants kPhysicsStep (float or double), kMaximumFrameTime (double),
 //     kInvalidHistoryTimeMessage, kNonIncreasingHistoryTimeMessage;
 //   Config MakeInitialConfig();
 //   State MakeState(const Config&);                    // may throw
