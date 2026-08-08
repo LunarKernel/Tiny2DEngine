@@ -1,7 +1,5 @@
 #include <SDL.h>
 #include <imgui.h>
-#include <imgui_impl_sdl2.h>
-#include <imgui_impl_sdlrenderer2.h>
 
 #include <algorithm>
 #include <array>
@@ -11,6 +9,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "app/lab_shell.h"
 #include "fixed_step_clock.h"
 #include "incline_spring_model.h"
 #include "sim_ui.h"
@@ -470,6 +469,7 @@ SimulationResult RunInclineSpringSimulation(SDL_Renderer* renderer) {
     return SimulationResult::kBackToSelection;
   }
 
+  namespace shell = tiny2d::sandbox::shell;
   SimulationConfig config;
   State state;
   bool simulation_started = false;
@@ -489,26 +489,17 @@ SimulationResult RunInclineSpringSimulation(SDL_Renderer* renderer) {
     ShowError(message);
   };
 
-  while (true) {
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT) {
-        return SimulationResult::kQuit;
-      }
-      if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-          event.key.keysym.sym == SDLK_SPACE && simulation_started) {
-        simulation_paused = !simulation_paused;
-      }
+  const auto frame =
+      [&](const shell::FrameInput& input) -> std::optional<SimulationResult> {
+    if (input.quit_requested) {
+      return SimulationResult::kQuit;
+    }
+    if (input.space_pressed && simulation_started) {
+      simulation_paused = !simulation_paused;
     }
 
-    ImGui_ImplSDLRenderer2_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
-
-    const Uint64 current_time = SDL_GetPerformanceCounter();
     if (!simulation_started) {
-      clock.Reset(current_time);
+      clock.Reset(input.counter);
       if (DrawSetupScreen(&config, &back_to_selection)) {
         if (const char* error = Reset(config, state); error != nullptr) {
           ShowError(error);
@@ -520,9 +511,9 @@ SimulationResult RunInclineSpringSimulation(SDL_Renderer* renderer) {
         }
       }
     } else if (simulation_paused) {
-      clock.Reset(current_time);
+      clock.Reset(input.counter);
     } else {
-      clock.Accumulate(current_time, kMaxFrameTime);
+      clock.Accumulate(input.counter, kMaxFrameTime);
 
       while (clock.HasStep(kPhysicsStep)) {
         try {
@@ -544,25 +535,25 @@ SimulationResult RunInclineSpringSimulation(SDL_Renderer* renderer) {
                         &back_to_selection);
     }
 
-    ImGui::Render();
-    SDL_SetRenderDrawColor(renderer, 20, 20, 20, 255);
-    SDL_RenderClear(renderer);
-
-    if (simulation_started) {
-      if (state.config.spring_enabled) {
-        DrawSpring(renderer, state);
-      }
-      for (const tiny2d::Rectangle& body : state.bodies) {
-        DrawRectangle(renderer, body);
-      }
-    }
-    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
-    SDL_RenderPresent(renderer);
-
     if (back_to_selection) {
       return SimulationResult::kBackToSelection;
     }
-  }
+    return std::nullopt;
+  };
+
+  const auto underlay = [&](SDL_Renderer* target) {
+    if (simulation_started) {
+      if (state.config.spring_enabled) {
+        DrawSpring(target, state);
+      }
+      for (const tiny2d::Rectangle& body : state.bodies) {
+        DrawRectangle(target, body);
+      }
+    }
+  };
+
+  return shell::RunFrameLoop(renderer, frame, underlay,
+                             SDL_Color{20, 20, 20, 255});
 }
 
 }  // namespace tiny2d::sandbox::incline_spring

@@ -1,7 +1,5 @@
 #include <SDL.h>
 #include <imgui.h>
-#include <imgui_impl_sdl2.h>
-#include <imgui_impl_sdlrenderer2.h>
 
 #include <algorithm>
 #include <array>
@@ -10,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "app/lab_shell.h"
 #include "fixed_step_clock.h"
 #include "impact_lab_model.h"
 #include "sim_ui.h"
@@ -24,20 +23,14 @@ constexpr float kControlStart = 300.0f;
 constexpr float kSliderWidth = 300.0f;
 constexpr float kInputWidth = 105.0f;
 
-enum class SetupAction {
-  kNone,
-  kStart,
-  kBack,
-};
-
 enum class MonitorAction {
   kNone,
   kReplay,
   kBack,
 };
 
-SetupAction DrawSetupScreen(ImpactLabConfig* config,
-                            const std::string& runtime_error) {
+shell::SetupAction DrawSetupScreen(ImpactLabConfig* config,
+                                   const std::string& runtime_error) {
   ImGuiIO& io = ImGui::GetIO();
   ImGui::SetNextWindowPos({0.0f, 0.0f});
   ImGui::SetNextWindowSize(io.DisplaySize);
@@ -117,9 +110,9 @@ SetupAction DrawSetupScreen(ImpactLabConfig* config,
   const float spacing = ImGui::GetStyle().ItemSpacing.x;
   const float button_width =
       (ImGui::GetContentRegionAvail().x - 3.0f * spacing) / 4.0f;
-  SetupAction action = SetupAction::kNone;
+  shell::SetupAction action = shell::SetupAction::kNone;
   if (ImGui::Button("Back", {button_width, 38.0f})) {
-    action = SetupAction::kBack;
+    action = shell::SetupAction::kBack;
   }
   ImGui::SameLine();
   if (ImGui::Button("V16 grazing evidence", {button_width, 38.0f})) {
@@ -132,7 +125,7 @@ SetupAction DrawSetupScreen(ImpactLabConfig* config,
   ImGui::SameLine();
   ImGui::BeginDisabled(error != nullptr);
   if (ImGui::Button("Run one evidence step", {button_width, 38.0f})) {
-    action = SetupAction::kStart;
+    action = shell::SetupAction::kStart;
   }
   ImGui::EndDisabled();
 
@@ -515,103 +508,92 @@ SimulationResult RunImpactLabSimulation(SDL_Renderer* renderer) {
     clock.Reset(current_time);
   };
 
-  while (true) {
-    bool return_requested = false;
-    SimulationResult return_result = SimulationResult::kBackToSelection;
-    bool replay_requested = false;
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT) {
-        return_requested = true;
-        return_result = SimulationResult::kQuit;
-      } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-                 event.key.keysym.sym == SDLK_SPACE && simulation_started &&
-                 runtime_error.empty()) {
-        replay_requested = true;
-      }
-    }
-
-    ImGui_ImplSDLRenderer2_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
-
-    const Uint64 current_time = SDL_GetPerformanceCounter();
-    if (!return_requested && !simulation_started) {
-      clock.Reset(current_time);
-      const SetupAction action = DrawSetupScreen(&config, runtime_error);
-      if (action == SetupAction::kBack) {
-        return_requested = true;
-      } else if (action == SetupAction::kStart) {
-        try {
-          reset_evidence(current_time);
-        } catch (const std::exception& error) {
-          runtime_error = error.what();
+  return shell::RunFrameLoop(
+      renderer,
+      [&](const shell::FrameInput& input) -> std::optional<SimulationResult> {
+        bool return_requested = false;
+        SimulationResult return_result = SimulationResult::kBackToSelection;
+        if (input.quit_requested) {
+          return_requested = true;
+          return_result = SimulationResult::kQuit;
         }
-      }
-    } else if (simulation_started) {
-      if (replay_requested) {
-        try {
-          reset_evidence(current_time);
-        } catch (const std::exception& error) {
-          runtime_error = error.what();
-          evidence_complete = true;
-        }
-      }
-      if (!return_requested && !evidence_complete && runtime_error.empty()) {
-        clock.Accumulate(current_time, kMaximumFrameTime);
-        if (clock.HasStep(kImpactLabPhysicsStep)) {
-          try {
-            if (!StepImpactLab(config, kImpactLabPhysicsStep, &state)) {
-              const char* state_error = GetImpactLabStateError(config, state);
-              runtime_error =
-                  state_error != nullptr
-                      ? state_error
-                      : "ImpactLab rejected the fixed evidence step.";
-            } else if (!AppendHistorySample(&history, state,
-                                            &ImpactLabState::time_seconds)) {
-              runtime_error = "ImpactLab history time stopped increasing.";
+        const bool replay_requested =
+            input.space_pressed && simulation_started && runtime_error.empty();
+
+        if (!return_requested && !simulation_started) {
+          clock.Reset(input.counter);
+          const shell::SetupAction action =
+              DrawSetupScreen(&config, runtime_error);
+          if (action == shell::SetupAction::kBack) {
+            return_requested = true;
+          } else if (action == shell::SetupAction::kStart) {
+            try {
+              reset_evidence(input.counter);
+            } catch (const std::exception& error) {
+              runtime_error = error.what();
             }
-          } catch (const std::exception& error) {
-            runtime_error = error.what();
           }
-          evidence_complete = true;
-          clock.DiscardPendingSteps();
+        } else if (simulation_started) {
+          if (replay_requested) {
+            try {
+              reset_evidence(input.counter);
+            } catch (const std::exception& error) {
+              runtime_error = error.what();
+              evidence_complete = true;
+            }
+          }
+          if (!return_requested && !evidence_complete &&
+              runtime_error.empty()) {
+            clock.Accumulate(input.counter, kMaximumFrameTime);
+            if (clock.HasStep(kImpactLabPhysicsStep)) {
+              try {
+                if (!StepImpactLab(config, kImpactLabPhysicsStep, &state)) {
+                  const char* state_error =
+                      GetImpactLabStateError(config, state);
+                  runtime_error =
+                      state_error != nullptr
+                          ? state_error
+                          : "ImpactLab rejected the fixed evidence step.";
+                } else if (!AppendHistorySample(
+                               &history, state,
+                               &ImpactLabState::time_seconds)) {
+                  runtime_error = "ImpactLab history time stopped increasing.";
+                }
+              } catch (const std::exception& error) {
+                runtime_error = error.what();
+              }
+              evidence_complete = true;
+              clock.DiscardPendingSteps();
+            }
+          } else {
+            clock.Reset(input.counter);
+          }
+
+          ImpactLabState displayed_state = state;
+          const MonitorAction action =
+              !return_requested
+                  ? DrawMonitor(config, state, history, evidence_complete,
+                                &inspect_time, &follow_live, runtime_error,
+                                &displayed_state)
+                  : MonitorAction::kNone;
+          DrawImpactLabScene(config, displayed_state);
+          if (action == MonitorAction::kReplay) {
+            try {
+              reset_evidence(input.counter);
+            } catch (const std::exception& error) {
+              runtime_error = error.what();
+              evidence_complete = true;
+            }
+          } else if (action == MonitorAction::kBack) {
+            return_requested = true;
+          }
         }
-      } else {
-        clock.Reset(current_time);
-      }
 
-      ImpactLabState displayed_state = state;
-      const MonitorAction action =
-          !return_requested
-              ? DrawMonitor(config, state, history, evidence_complete,
-                            &inspect_time, &follow_live, runtime_error,
-                            &displayed_state)
-              : MonitorAction::kNone;
-      DrawImpactLabScene(config, displayed_state);
-      if (action == MonitorAction::kReplay) {
-        try {
-          reset_evidence(current_time);
-        } catch (const std::exception& error) {
-          runtime_error = error.what();
-          evidence_complete = true;
+        if (return_requested) {
+          return return_result;
         }
-      } else if (action == MonitorAction::kBack) {
-        return_requested = true;
-      }
-    }
-
-    ImGui::Render();
-    SDL_SetRenderDrawColor(renderer, 18, 20, 24, 255);
-    SDL_RenderClear(renderer);
-    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
-    SDL_RenderPresent(renderer);
-
-    if (return_requested) {
-      return return_result;
-    }
-  }
+        return std::nullopt;
+      });
 }
 
 }  // namespace tiny2d::sandbox

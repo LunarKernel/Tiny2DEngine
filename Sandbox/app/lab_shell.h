@@ -39,8 +39,12 @@ struct FrameInput {
 // Pumps SDL events, begins an ImGui frame, calls frame(input), then renders.
 // frame returns a result to end the loop or std::nullopt to continue.
 // SDL_QUIT is reported through FrameInput; the frame decides how to exit.
-template <typename FrameFunction>
-SimulationResult RunFrameLoop(SDL_Renderer* renderer, FrameFunction frame) {
+// underlay(renderer) draws SDL primitives between the clear and the ImGui
+// layer, for labs that render their world without ImGui.
+template <typename FrameFunction, typename UnderlayFunction>
+SimulationResult RunFrameLoop(SDL_Renderer* renderer, FrameFunction frame,
+                              UnderlayFunction underlay,
+                              SDL_Color clear_color = {18, 20, 24, 255}) {
   while (true) {
     FrameInput input;
     SDL_Event event;
@@ -62,8 +66,10 @@ SimulationResult RunFrameLoop(SDL_Renderer* renderer, FrameFunction frame) {
     const std::optional<SimulationResult> result = frame(input);
 
     ImGui::Render();
-    SDL_SetRenderDrawColor(renderer, 18, 20, 24, 255);
+    SDL_SetRenderDrawColor(renderer, clear_color.r, clear_color.g,
+                           clear_color.b, clear_color.a);
     SDL_RenderClear(renderer);
+    underlay(renderer);
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
     SDL_RenderPresent(renderer);
 
@@ -71,6 +77,11 @@ SimulationResult RunFrameLoop(SDL_Renderer* renderer, FrameFunction frame) {
       return *result;
     }
   }
+}
+
+template <typename FrameFunction>
+SimulationResult RunFrameLoop(SDL_Renderer* renderer, FrameFunction frame) {
+  return RunFrameLoop(renderer, frame, [](SDL_Renderer*) {});
 }
 
 // Standard continuous-lab lifecycle. Traits must provide:
