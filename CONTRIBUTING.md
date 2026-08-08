@@ -48,6 +48,16 @@ powershell -File tools/verify.ps1 -Profile Full
 
 已审查的暂存差异发生任何变化，都会使原审查和验证失效，必须重新执行相关阶段。
 
+## 版本与文档
+
+- `vcpkg.json` 中的 `version-semver` 是产品版本的唯一来源；CMake 和应用标题
+  都从该值生成。
+- V9、V14 等编号表示实验代次，不是语义化产品版本。
+- 正式发布时，`CHANGELOG.md` 和 Git 标签 `v<version-semver>` 必须与产品版本
+  一致。
+- 根目录 `README.md` 保持简洁；详细中文实现说明位于
+  `docs/DEVELOPER_GUIDE.zh-CN.md`。
+
 ## 代码规范
 
 - 使用 C++17 和仓库根目录的 `.clang-format`、`.clang-tidy`。

@@ -94,3 +94,41 @@ jobs:
           cmake --preset ${{ matrix.configure_preset }}
           cmake --build --preset ${{ matrix.build_preset }} --parallel
           ctest --test-dir ${{ matrix.build_directory }} -C ${{ matrix.configuration }} --output-on-failure
+
+  headless:
+    name: Headless ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: GCC
+            compiler: g++
+            build_directory: build/headless-gcc
+          - name: Clang
+            compiler: clang++
+            build_directory: build/headless-clang
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Configure
+        run: >-
+          cmake -S . -B ${{ matrix.build_directory }} -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+          -DTINY2D_BUILD_SANDBOX=OFF
+          -DBUILD_TESTING=ON
+          -DTINY2D_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build ${{ matrix.build_directory }} --parallel 2
+
+      - name: Test
+        run: >-
+          ctest --test-dir ${{ matrix.build_directory }}
+          --output-on-failure --timeout 60

@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Tiny2DEngine VERSION 2.0.0 LANGUAGES CXX)
+file(READ "${CMAKE_CURRENT_LIST_DIR}/vcpkg.json" TINY2D_VCPKG_MANIFEST)
+string(JSON TINY2D_PRODUCT_VERSION GET "${TINY2D_VCPKG_MANIFEST}"
+       version-semver)
+
+project(Tiny2DEngine VERSION "${TINY2D_PRODUCT_VERSION}" LANGUAGES CXX)
 
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -55,6 +59,9 @@ tiny2d_enable_warnings(Tiny2DEngine)
 
 if(TINY2D_BUILD_SANDBOX OR BUILD_TESTING)
   add_library(Tiny2DSimulationModels STATIC
+      Sandbox/contact_lab_model.cc
+      Sandbox/force_lab_model.cc
+      Sandbox/impact_lab_model.cc
       Sandbox/incline_spring_model.cc
       Sandbox/lorentz_particle_model.cc
       Sandbox/rolling_disk_model.cc
@@ -72,11 +79,18 @@ endif()
 
 if(TINY2D_BUILD_SANDBOX)
   add_executable(Sandbox WIN32
+      Sandbox/contact_lab_simulation.cc
+      Sandbox/force_lab_simulation.cc
+      Sandbox/impact_lab_simulation.cc
       Sandbox/main.cc
       Sandbox/incline_spring_simulation.cc
       Sandbox/lorentz_particle_simulation.cc
       Sandbox/rolling_disk_simulation.cc
       Sandbox/rotation_pendulum_simulation.cc
+  )
+
+  target_compile_definitions(Sandbox PRIVATE
+      TINY2D_PRODUCT_VERSION="${PROJECT_VERSION}"
   )
 
   target_link_libraries(Sandbox PRIVATE
@@ -142,4 +156,34 @@ if(BUILD_TESTING)
 
   add_test(NAME Tiny2DLorentzParticleTests COMMAND Tiny2DLorentzParticleTests)
   set_tests_properties(Tiny2DLorentzParticleTests PROPERTIES TIMEOUT 30)
+
+  add_executable(Tiny2DForceLabTests
+      Sandbox/force_lab_test.cc
+  )
+
+  target_link_libraries(Tiny2DForceLabTests PRIVATE Tiny2DSimulationModels)
+  tiny2d_enable_warnings(Tiny2DForceLabTests)
+
+  add_test(NAME Tiny2DForceLabTests COMMAND Tiny2DForceLabTests)
+  set_tests_properties(Tiny2DForceLabTests PROPERTIES TIMEOUT 30)
+
+  add_executable(Tiny2DContactLabTests
+      Sandbox/contact_lab_test.cc
+  )
+
+  target_link_libraries(Tiny2DContactLabTests PRIVATE Tiny2DSimulationModels)
+  tiny2d_enable_warnings(Tiny2DContactLabTests)
+
+  add_test(NAME Tiny2DContactLabTests COMMAND Tiny2DContactLabTests)
+  set_tests_properties(Tiny2DContactLabTests PROPERTIES TIMEOUT 30)
+
+  add_executable(Tiny2DImpactLabTests
+      Sandbox/impact_lab_test.cc
+  )
+
+  target_link_libraries(Tiny2DImpactLabTests PRIVATE Tiny2DSimulationModels)
+  tiny2d_enable_warnings(Tiny2DImpactLabTests)
+
+  add_test(NAME Tiny2DImpactLabTests COMMAND Tiny2DImpactLabTests)
+  set_tests_properties(Tiny2DImpactLabTests PROPERTIES TIMEOUT 30)
 endif()

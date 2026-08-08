@@ -15,6 +15,9 @@ constexpr int kWindowHeight = 800;
 
 enum class ModelChoice {
   kNone,
+  kImpactLab,
+  kContactLab,
+  kForceLab,
   kInclineSpring,
   kRotationPendulum,
   kRollingDisk,
@@ -66,11 +69,40 @@ ModelChoice ChooseModel(SDL_Renderer* renderer) {
     ImGui::Spacing();
 
     ModelChoice choice = ModelChoice::kNone;
+    ImGui::TextUnformatted("V17 ImpactLab: Continuous Circle Impacts");
+    ImGui::TextWrapped(
+        "Compare discrete collision detection with circle-circle time of "
+        "impact for grazing and diameter-skipping motion.");
+    constexpr float kModelButtonHeight = 36.0f;
+    if (ImGui::Button("Open V17 ImpactLab",
+                      {panel_width, kModelButtonHeight})) {
+      choice = ModelChoice::kImpactLab;
+    }
+
+    ImGui::Spacing();
+    ImGui::TextUnformatted("V16 ContactLab: Circle Impacts and Rolling");
+    ImGui::TextWrapped(
+        "Native circle bodies, material-aware impacts, momentum and energy "
+        "checks, and disk or hoop rolling contact.");
+    if (ImGui::Button("Open V16 ContactLab",
+                      {panel_width, kModelButtonHeight})) {
+      choice = ModelChoice::kContactLab;
+    }
+
+    ImGui::Spacing();
+    ImGui::TextUnformatted("V15 ForceLab: Eccentric Spring Rigid Body");
+    ImGui::TextWrapped(
+        "A rectangular rigid body coupled to a fixed spring through an "
+        "adjustable center or eccentric attachment point.");
+    if (ImGui::Button("Open V15 ForceLab", {panel_width, kModelButtonHeight})) {
+      choice = ModelChoice::kForceLab;
+    }
+
+    ImGui::Spacing();
     ImGui::TextUnformatted("V9 Stable: Incline / Spring / Electric Field");
     ImGui::TextWrapped(
         "Two blocks, ramp, floor, spring, electric field, SI telemetry, and "
         "history.");
-    constexpr float kModelButtonHeight = 36.0f;
     if (ImGui::Button("Open V9 incline laboratory",
                       {panel_width, kModelButtonHeight})) {
       choice = ModelChoice::kInclineSpring;
@@ -131,10 +163,10 @@ int main(int, char*[]) {
     return 1;
   }
 
-  SDL_Window* window =
-      SDL_CreateWindow("Tiny2D Engine V14 Development (2.0 release base)",
-                       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                       kWindowWidth, kWindowHeight, SDL_WINDOW_SHOWN);
+  SDL_Window* window = SDL_CreateWindow(
+      "Tiny2D Engine " TINY2D_PRODUCT_VERSION " | V17 Development",
+      SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, kWindowWidth,
+      kWindowHeight, SDL_WINDOW_SHOWN);
   if (window == nullptr) {
     ShowError("The application window could not be created.");
     SDL_Quit();
@@ -194,7 +226,13 @@ int main(int, char*[]) {
       const ModelChoice choice = ChooseModel(renderer);
       tiny2d::sandbox::SimulationResult result =
           tiny2d::sandbox::SimulationResult::kQuit;
-      if (choice == ModelChoice::kInclineSpring) {
+      if (choice == ModelChoice::kImpactLab) {
+        result = tiny2d::sandbox::RunImpactLabSimulation(renderer);
+      } else if (choice == ModelChoice::kContactLab) {
+        result = tiny2d::sandbox::RunContactLabSimulation(renderer);
+      } else if (choice == ModelChoice::kForceLab) {
+        result = tiny2d::sandbox::RunForceLabSimulation(renderer);
+      } else if (choice == ModelChoice::kInclineSpring) {
         result = tiny2d::sandbox::RunInclineSpringSimulation(renderer);
       } else if (choice == ModelChoice::kRotationPendulum) {
         result = tiny2d::sandbox::RunRotationPendulumSimulation(renderer);
