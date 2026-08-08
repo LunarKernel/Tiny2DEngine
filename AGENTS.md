@@ -4,10 +4,26 @@
 
 - Use C++17, CMake, SDL2, ImGui, and the existing Google-style `.clang-format`.
 - Keep reusable physics code in `Engine/` and simulation-specific code in
-  `Sandbox/`.
-- Keep the dependency direction `Sandbox -> Engine`; `Engine` must not depend on
-  SDL UI, ImGui, or a specific simulation.
-- Preserve validated V9 and V10 behavior unless the task explicitly changes it.
+  `Sandbox/`. The engine's public API is `Engine/tiny2d_engine.h`; its
+  implementation is split across `Engine/internal/` (body_math, validation,
+  contacts, solver) plus the step orchestration in `tiny2d_engine.cc`.
+  `tiny2d::internal` symbols are implementation details with no stability
+  guarantee.
+- In `Sandbox/`, each lab is a UI-free physics model (`*_model.h/.cc`, the
+  Config/State/Derived/Step pattern) plus a UI file (`*_simulation.cc`) built
+  on the shared shell `Sandbox/app/lab_shell.h`. The selection menu renders
+  from `Sandbox/app/lab_registry.h`; adding a lab means a model, a traits
+  declaration or custom frame on the shell, a registry entry, CMake targets,
+  and a test suite.
+- Keep the dependency direction
+  `main -> registry -> lab UI -> shell -> model -> Engine`; `Engine` must not
+  depend on SDL UI, ImGui, or a specific simulation (the headless CI job
+  enforces this).
+- Preserve the validated behavior of every delivered experiment generation
+  (V9 through V17) unless the task explicitly changes it. The rectangle-only
+  `Update` must stay trajectory-identical to the mixed `Update` with no
+  circles; `TestLegacyUpdateMatchesMixedUpdateTrajectories` guards this and
+  must not be weakened.
 - Do not add large dependencies, speculative abstractions, or unrelated engine
   features.
 
@@ -22,7 +38,13 @@
   APIs. Use fixed seeds for randomized tests and explicit tolerances for
   floating-point checks.
 - New tests must link production targets; do not add new tests that include a
-  `.cc` implementation file.
+  `.cc` implementation file. Use the shared `CHECK` harness from
+  `tests/test_support.h` instead of a per-file copy.
+- Keep the root `README.md` a concise overview; long-form implementation
+  documentation belongs in `docs/DEVELOPER_GUIDE.zh-CN.md`.
+- An iteration that delivers a `ROADMAP.md` item must update `ROADMAP.md`
+  (baseline, limitations, and next action) and `CHANGELOG.md` in the same
+  iteration, so the planning documents never contradict the code.
 - Never silence warnings, disable tests, or reduce test coverage just to pass a
   check.
 - Do not commit, tag, push, or publish unless the user explicitly asks.
@@ -96,6 +118,11 @@ unrelated user changes.
 
 ## Verification
 
+- `powershell -File tools/verify.ps1 -Profile Fast` bundles the routine gate
+  (clang-format `--Werror` over tracked and untracked sources, Debug build,
+  `ctest`, whitespace checks); the `Full` profile adds Release, ASan,
+  clang-tidy, and the engine-only warnings-as-errors build. Run formatting in
+  write mode on touched files before the gate, since the check is strict.
 - Configure from a VS2022 Developer terminal with `cmake --preset msvc-x64`.
 - Build and test with `cmake --build --preset debug` and
   `ctest --preset test-debug`.
