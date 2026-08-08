@@ -406,17 +406,15 @@ struct PendulumLabTraits {
                ? error
                : "The fixed-step integrator rejected an unstable state.";
   }
-  bool PauseAfterStep(const State&) { return false; }
+  const char* AfterStepIssue(const State&) { return nullptr; }
   shell::SetupAction DrawSetup(Config* config, const std::string&) {
     return DrawPendulumSetupScreen(config);
   }
-  void DrawScene(const Config& config, const State& state) {
+  bool DrawFrame(const Config& config, const State& state,
+                 const std::vector<State>& history, bool* paused,
+                 double* inspect_time, bool* follow_live,
+                 const std::string& error) {
     DrawPendulumScene(config, state);
-  }
-  bool DrawMonitor(const Config& config, const State& state,
-                   const std::vector<State>& history, bool* paused,
-                   double* inspect_time, bool* follow_live,
-                   const std::string& error) {
     return DrawPendulumMonitor(config, state, history, paused, inspect_time,
                                follow_live,
                                error.empty() ? nullptr : error.c_str());

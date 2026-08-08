@@ -1,14 +1,13 @@
 #include <SDL.h>
 #include <imgui.h>
-#include <imgui_impl_sdl2.h>
-#include <imgui_impl_sdlrenderer2.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
-#include "fixed_step_clock.h"
+#include "app/lab_shell.h"
 #include "lorentz_particle_model.h"
 #include "sim_ui.h"
 #include "simulation_history.h"
@@ -16,18 +15,14 @@
 
 namespace {
 
+namespace shell = tiny2d::sandbox::shell;
+
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kDegreesToRadians = kPi / 180.0;
 constexpr double kMaximumFrameTime = 0.25;
 constexpr float kControlStart = 310.0f;
 constexpr float kSliderWidth = 300.0f;
 constexpr float kInputWidth = 110.0f;
-
-enum class SetupAction {
-  kNone,
-  kStart,
-  kBack,
-};
 
 const char* GetStatusLabel(tiny2d::sandbox::LorentzParticleStatus status) {
   using tiny2d::sandbox::LorentzParticleStatus;
@@ -48,7 +43,8 @@ tiny2d::sandbox::LorentzParticleConfig MakeGravitoOrbitPreset() {
   return config;
 }
 
-SetupAction DrawSetupScreen(tiny2d::sandbox::LorentzParticleConfig* config) {
+shell::SetupAction DrawSetupScreen(
+    tiny2d::sandbox::LorentzParticleConfig* config) {
   using tiny2d::sandbox::LorentzParticleConfig;
 
   const ImVec2 display_size = ImGui::GetIO().DisplaySize;
@@ -134,9 +130,9 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::LorentzParticleConfig* config) {
   const float spacing = ImGui::GetStyle().ItemSpacing.x;
   const float button_width =
       (ImGui::GetContentRegionAvail().x - 3.0f * spacing) / 4.0f;
-  SetupAction action = SetupAction::kNone;
+  shell::SetupAction action = shell::SetupAction::kNone;
   if (ImGui::Button("Back to model selection", {button_width, 38.0f})) {
-    action = SetupAction::kBack;
+    action = shell::SetupAction::kBack;
   }
   ImGui::SameLine();
   if (ImGui::Button("Load V12 E/B preset", {button_width, 38.0f})) {
@@ -149,7 +145,7 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::LorentzParticleConfig* config) {
   ImGui::SameLine();
   ImGui::BeginDisabled(error != nullptr);
   if (ImGui::Button("Start simulation", {button_width, 38.0f})) {
-    action = SetupAction::kStart;
+    action = shell::SetupAction::kStart;
   }
   ImGui::EndDisabled();
 
@@ -470,147 +466,82 @@ bool DrawMonitor(
   return stop;
 }
 
+struct LorentzLabTraits {
+  using Config = tiny2d::sandbox::LorentzParticleConfig;
+  using State = tiny2d::sandbox::LorentzParticleState;
+  using Status = tiny2d::sandbox::LorentzParticleStatus;
+  static constexpr float kPhysicsStep = tiny2d::sandbox::kLorentzPhysicsStep;
+  static constexpr double kMaximumFrameTime = 0.25;
+  static constexpr const char* kInvalidHistoryTimeMessage =
+      "The particle model produced an invalid history time.";
+  static constexpr const char* kNonIncreasingHistoryTimeMessage =
+      "The particle model produced a non-increasing history time.";
+  static constexpr const char* kOutOfBoundsMessage =
+      "The particle left the 20 m x 12 m simulation domain.";
+
+  Config MakeInitialConfig() { return MakeGravitoOrbitPreset(); }
+  State MakeState(const Config& config) {
+    return tiny2d::sandbox::MakeInitialLorentzParticleState(config);
+  }
+  const char* InitialStateIssue(const Config&, const State& state) {
+    return state.status == Status::kOutOfBounds
+               ? "The particle starts outside the 20 m x 12 m domain."
+               : nullptr;
+  }
+  bool CanStep(const State& state) { return state.status == Status::kActive; }
+  bool Step(const Config& config, State* state) {
+    return tiny2d::sandbox::StepLorentzParticle(config, kPhysicsStep, state);
+  }
+  std::string StepFailureMessage(const Config& config, const State& state,
+                                 std::vector<State>* history) {
+    const char* error = nullptr;
+    if (state.status == Status::kOutOfBounds) {
+      bool recorded = false;
+      if (!history->empty() &&
+          state.time_seconds == history->back().time_seconds) {
+        history->back() = state;
+        recorded = true;
+      } else {
+        recorded = tiny2d::sandbox::AppendHistorySample(history, state,
+                                                        &State::time_seconds);
+      }
+      error = recorded ? kOutOfBoundsMessage : kNonIncreasingHistoryTimeMessage;
+    } else {
+      error = tiny2d::sandbox::GetLorentzParticleStateError(config, state);
+    }
+    return error != nullptr ? error
+                            : "The fixed-step Lorentz model rejected this "
+                              "state.";
+  }
+  const char* AfterStepIssue(const State& state) {
+    return state.status == Status::kOutOfBounds ? kOutOfBoundsMessage : nullptr;
+  }
+  shell::SetupAction DrawSetup(Config* config, const std::string&) {
+    return DrawSetupScreen(config);
+  }
+  bool DrawFrame(const Config& config, const State& state,
+                 const std::vector<State>& history, bool* paused,
+                 double* inspect_time, bool* follow_live,
+                 const std::string& error) {
+    const bool stop =
+        DrawMonitor(config, state, history, paused, inspect_time, follow_live,
+                    error.empty() ? nullptr : error.c_str());
+    const State* displayed_state =
+        tiny2d::sandbox::FindLorentzParticleState(history, *inspect_time);
+    if (displayed_state == nullptr) {
+      displayed_state = &state;
+    }
+    DrawScene(config, *displayed_state, history);
+    return stop;
+  }
+};
+
 }  // namespace
 
 namespace tiny2d::sandbox {
 
 SimulationResult RunLorentzParticleSimulation(SDL_Renderer* renderer) {
-  if (renderer == nullptr) {
-    return SimulationResult::kBackToSelection;
-  }
-
-  LorentzParticleConfig config = MakeGravitoOrbitPreset();
-  LorentzParticleState state = MakeInitialLorentzParticleState(config);
-  std::vector<LorentzParticleState> history;
-  bool simulation_started = false;
-  bool paused = false;
-  bool follow_live = true;
-  double inspect_time = 0.0;
-  const char* runtime_error = nullptr;
-  FixedStepClock clock(static_cast<double>(SDL_GetPerformanceFrequency()),
-                       SDL_GetPerformanceCounter());
-
-  while (true) {
-    bool return_requested = false;
-    SimulationResult return_result = SimulationResult::kBackToSelection;
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT) {
-        return_requested = true;
-        return_result = SimulationResult::kQuit;
-      } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-                 event.key.keysym.sym == SDLK_SPACE && simulation_started &&
-                 runtime_error == nullptr &&
-                 state.status == LorentzParticleStatus::kActive) {
-        paused = !paused;
-      }
-    }
-
-    ImGui_ImplSDLRenderer2_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
-
-    const Uint64 current_time = SDL_GetPerformanceCounter();
-    if (!return_requested && !simulation_started) {
-      clock.Reset(current_time);
-      const SetupAction action = DrawSetupScreen(&config);
-      if (action == SetupAction::kBack) {
-        return_requested = true;
-      } else if (action == SetupAction::kStart) {
-        state = MakeInitialLorentzParticleState(config);
-        history.clear();
-        const bool recorded = AppendHistorySample(
-            &history, state, &LorentzParticleState::time_seconds);
-        simulation_started = true;
-        paused = !recorded || state.status != LorentzParticleStatus::kActive;
-        follow_live = true;
-        inspect_time = 0.0;
-        runtime_error =
-            !recorded ? "The particle model produced an invalid history time."
-            : state.status == LorentzParticleStatus::kOutOfBounds
-                ? "The particle starts outside the 20 m x 12 m domain."
-                : nullptr;
-        clock.Reset(current_time);
-      }
-    } else if (simulation_started) {
-      if (!return_requested && !paused && runtime_error == nullptr &&
-          state.status == LorentzParticleStatus::kActive) {
-        clock.Accumulate(current_time, kMaximumFrameTime);
-        while (clock.HasStep(kLorentzPhysicsStep)) {
-          const bool stepped =
-              StepLorentzParticle(config, kLorentzPhysicsStep, &state);
-          if (!stepped) {
-            if (state.status == LorentzParticleStatus::kOutOfBounds) {
-              bool recorded = false;
-              if (!history.empty() &&
-                  state.time_seconds == history.back().time_seconds) {
-                history.back() = state;
-                recorded = true;
-              } else {
-                recorded = AppendHistorySample(
-                    &history, state, &LorentzParticleState::time_seconds);
-              }
-              runtime_error =
-                  recorded
-                      ? "The particle left the 20 m x 12 m simulation domain."
-                      : "The particle model produced a non-increasing history "
-                        "time.";
-            } else {
-              runtime_error = GetLorentzParticleStateError(config, state);
-            }
-            if (runtime_error == nullptr) {
-              runtime_error =
-                  "The fixed-step Lorentz model rejected this state.";
-            }
-            paused = true;
-            clock.DiscardPendingSteps();
-            break;
-          }
-          if (!AppendHistorySample(&history, state,
-                                   &LorentzParticleState::time_seconds)) {
-            runtime_error =
-                "The particle model produced a non-increasing history time.";
-            paused = true;
-            clock.DiscardPendingSteps();
-            break;
-          }
-          clock.ConsumeStep(kLorentzPhysicsStep);
-          if (state.status == LorentzParticleStatus::kOutOfBounds) {
-            runtime_error =
-                "The particle left the 20 m x 12 m simulation domain.";
-            paused = true;
-            clock.DiscardPendingSteps();
-            break;
-          }
-        }
-      } else {
-        clock.Reset(current_time);
-      }
-
-      if (!return_requested &&
-          DrawMonitor(config, state, history, &paused, &inspect_time,
-                      &follow_live, runtime_error)) {
-        return_requested = true;
-      }
-      const LorentzParticleState* displayed_state =
-          FindLorentzParticleState(history, inspect_time);
-      if (displayed_state == nullptr) {
-        displayed_state = &state;
-      }
-      DrawScene(config, *displayed_state, history);
-    }
-
-    ImGui::Render();
-    SDL_SetRenderDrawColor(renderer, 18, 20, 24, 255);
-    SDL_RenderClear(renderer);
-    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
-    SDL_RenderPresent(renderer);
-
-    if (return_requested) {
-      return return_result;
-    }
-  }
+  return shell::RunLab(renderer, LorentzLabTraits{});
 }
 
 }  // namespace tiny2d::sandbox

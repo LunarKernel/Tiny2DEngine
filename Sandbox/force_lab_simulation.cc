@@ -1,7 +1,5 @@
 #include <SDL.h>
 #include <imgui.h>
-#include <imgui_impl_sdl2.h>
-#include <imgui_impl_sdlrenderer2.h>
 
 #include <algorithm>
 #include <array>
@@ -11,10 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "fixed_step_clock.h"
+#include "app/lab_shell.h"
 #include "force_lab_model.h"
 #include "sim_ui.h"
-#include "simulation_history.h"
 #include "simulations.h"
 
 namespace tiny2d::sandbox {
@@ -26,13 +23,7 @@ constexpr float kSliderWidth = 310.0f;
 constexpr float kInputWidth = 110.0f;
 constexpr float kRadiansToDegrees = 57.2957795131f;
 
-enum class SetupAction {
-  kNone,
-  kStart,
-  kBack,
-};
-
-SetupAction DrawSetupScreen(ForceLabConfig* config) {
+shell::SetupAction DrawSetupScreen(ForceLabConfig* config) {
   ImGuiIO& io = ImGui::GetIO();
   ImGui::SetNextWindowPos({0.0f, 0.0f});
   ImGui::SetNextWindowSize(io.DisplaySize);
@@ -155,9 +146,9 @@ SetupAction DrawSetupScreen(ForceLabConfig* config) {
   const float spacing = ImGui::GetStyle().ItemSpacing.x;
   const float button_width =
       (ImGui::GetContentRegionAvail().x - 3.0f * spacing) / 4.0f;
-  SetupAction action = SetupAction::kNone;
+  shell::SetupAction action = shell::SetupAction::kNone;
   if (ImGui::Button("Back", {button_width, 38.0f})) {
-    action = SetupAction::kBack;
+    action = shell::SetupAction::kBack;
   }
   ImGui::SameLine();
   if (ImGui::Button("Centered analytical preset", {button_width, 38.0f})) {
@@ -170,7 +161,7 @@ SetupAction DrawSetupScreen(ForceLabConfig* config) {
   ImGui::SameLine();
   ImGui::BeginDisabled(error != nullptr);
   if (ImGui::Button("Start", {button_width, 38.0f})) {
-    action = SetupAction::kStart;
+    action = shell::SetupAction::kStart;
   }
   ImGui::EndDisabled();
 
@@ -391,121 +382,51 @@ bool DrawMonitor(const ForceLabConfig& config,
   return stop;
 }
 
+struct ForceLabTraits {
+  using Config = ForceLabConfig;
+  using State = ForceLabState;
+  static constexpr float kPhysicsStep = kForceLabPhysicsStep;
+  static constexpr double kMaximumFrameTime = 0.25;
+  static constexpr const char* kInvalidHistoryTimeMessage =
+      "ForceLab produced an invalid history time.";
+  static constexpr const char* kNonIncreasingHistoryTimeMessage =
+      "ForceLab history time stopped increasing.";
+
+  Config MakeInitialConfig() { return MakeEccentricDemoConfig(); }
+  State MakeState(const Config& config) {
+    return MakeInitialForceLabState(config);
+  }
+  const char* InitialStateIssue(const Config&, const State&) { return nullptr; }
+  bool CanStep(const State&) { return true; }
+  bool Step(const Config& config, State* state) {
+    return StepForceLab(config, kPhysicsStep, state);
+  }
+  std::string StepFailureMessage(const Config& config, const State& state,
+                                 std::vector<State>*) {
+    const char* error = GetForceLabStateError(config, state);
+    return error != nullptr ? error
+                            : "ForceLab rejected an unstable fixed step.";
+  }
+  const char* AfterStepIssue(const State&) { return nullptr; }
+  shell::SetupAction DrawSetup(Config* config, const std::string&) {
+    return DrawSetupScreen(config);
+  }
+  bool DrawFrame(const Config& config, const State& state,
+                 const std::vector<State>& history, bool* paused,
+                 double* inspect_time, bool* follow_live,
+                 const std::string& error) {
+    State displayed_state = state;
+    const bool stop = DrawMonitor(config, state, history, paused, inspect_time,
+                                  follow_live, error, &displayed_state);
+    DrawForceLabScene(config, displayed_state);
+    return stop;
+  }
+};
+
 }  // namespace
 
 SimulationResult RunForceLabSimulation(SDL_Renderer* renderer) {
-  if (renderer == nullptr) {
-    return SimulationResult::kBackToSelection;
-  }
-
-  ForceLabConfig config = MakeEccentricDemoConfig();
-  ForceLabState state = MakeInitialForceLabState(config);
-  std::vector<ForceLabState> history;
-  bool simulation_started = false;
-  bool paused = false;
-  bool follow_live = true;
-  double inspect_time = 0.0;
-  std::string runtime_error;
-  FixedStepClock clock(static_cast<double>(SDL_GetPerformanceFrequency()),
-                       SDL_GetPerformanceCounter());
-
-  while (true) {
-    bool return_requested = false;
-    SimulationResult return_result = SimulationResult::kBackToSelection;
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT) {
-        return_requested = true;
-        return_result = SimulationResult::kQuit;
-      } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-                 event.key.keysym.sym == SDLK_SPACE && simulation_started &&
-                 runtime_error.empty()) {
-        paused = !paused;
-      }
-    }
-
-    ImGui_ImplSDLRenderer2_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
-
-    const Uint64 current_time = SDL_GetPerformanceCounter();
-    if (!return_requested && !simulation_started) {
-      clock.Reset(current_time);
-      const SetupAction action = DrawSetupScreen(&config);
-      if (action == SetupAction::kBack) {
-        return_requested = true;
-      } else if (action == SetupAction::kStart) {
-        try {
-          state = MakeInitialForceLabState(config);
-          history.clear();
-          const bool recorded = AppendHistorySample(
-              &history, state, &ForceLabState::time_seconds);
-          simulation_started = true;
-          paused = !recorded;
-          follow_live = true;
-          inspect_time = 0.0;
-          runtime_error =
-              recorded ? "" : "ForceLab produced an invalid history time.";
-          clock.Reset(current_time);
-        } catch (const std::exception& error) {
-          runtime_error = error.what();
-        }
-      }
-    } else if (simulation_started) {
-      if (!return_requested && !paused && runtime_error.empty()) {
-        clock.Accumulate(current_time, kMaximumFrameTime);
-        while (clock.HasStep(kForceLabPhysicsStep)) {
-          try {
-            if (!StepForceLab(config, kForceLabPhysicsStep, &state)) {
-              const char* state_error = GetForceLabStateError(config, state);
-              runtime_error = state_error != nullptr
-                                  ? state_error
-                                  : "ForceLab rejected an unstable fixed step.";
-              paused = true;
-              clock.DiscardPendingSteps();
-              break;
-            }
-          } catch (const std::exception& error) {
-            runtime_error = error.what();
-            paused = true;
-            clock.DiscardPendingSteps();
-            break;
-          }
-          if (!AppendHistorySample(&history, state,
-                                   &ForceLabState::time_seconds)) {
-            runtime_error = "ForceLab history time stopped increasing.";
-            paused = true;
-            clock.DiscardPendingSteps();
-            break;
-          }
-          clock.ConsumeStep(kForceLabPhysicsStep);
-        }
-      } else {
-        clock.Reset(current_time);
-      }
-
-      ForceLabState displayed_state = state;
-      const bool stop =
-          !return_requested &&
-          DrawMonitor(config, state, history, &paused, &inspect_time,
-                      &follow_live, runtime_error, &displayed_state);
-      DrawForceLabScene(config, displayed_state);
-      if (stop) {
-        return_requested = true;
-      }
-    }
-
-    ImGui::Render();
-    SDL_SetRenderDrawColor(renderer, 18, 20, 24, 255);
-    SDL_RenderClear(renderer);
-    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
-    SDL_RenderPresent(renderer);
-
-    if (return_requested) {
-      return return_result;
-    }
-  }
+  return shell::RunLab(renderer, ForceLabTraits{});
 }
 
 }  // namespace tiny2d::sandbox

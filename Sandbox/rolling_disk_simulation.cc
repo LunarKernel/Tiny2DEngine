@@ -1,20 +1,21 @@
 #include <SDL.h>
 #include <imgui.h>
-#include <imgui_impl_sdl2.h>
-#include <imgui_impl_sdlrenderer2.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
-#include "fixed_step_clock.h"
+#include "app/lab_shell.h"
 #include "rolling_disk_model.h"
 #include "sim_ui.h"
 #include "simulation_history.h"
 #include "simulations.h"
 
 namespace {
+
+namespace shell = tiny2d::sandbox::shell;
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDegreesToRadians = kPi / 180.0f;
@@ -23,14 +24,6 @@ constexpr float kPhysicsStep = 1.0f / 240.0f;
 constexpr float kControlStart = 310.0f;
 constexpr float kSliderWidth = 300.0f;
 constexpr float kInputWidth = 110.0f;
-constexpr double kMaximumFrameTime = 0.25;
-
-enum class SetupAction {
-  kNone,
-  kStart,
-  kBack,
-};
-
 const char* GetContactModeLabel(
     tiny2d::sandbox::RollingContactMode contact_mode) {
   return contact_mode == tiny2d::sandbox::RollingContactMode::kRolling
@@ -53,7 +46,7 @@ const char* GetStatusLabel(tiny2d::sandbox::RollingDiskStatus status) {
   return "UNKNOWN";
 }
 
-SetupAction DrawSetupScreen(tiny2d::sandbox::RollingDiskConfig* config) {
+shell::SetupAction DrawSetupScreen(tiny2d::sandbox::RollingDiskConfig* config) {
   using tiny2d::sandbox::RollingDiskConfig;
   using tiny2d::sandbox::RollingDiskKind;
 
@@ -179,9 +172,9 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::RollingDiskConfig* config) {
   const float spacing = ImGui::GetStyle().ItemSpacing.x;
   const float button_width =
       (ImGui::GetContentRegionAvail().x - 2.0f * spacing) / 3.0f;
-  SetupAction action = SetupAction::kNone;
+  shell::SetupAction action = shell::SetupAction::kNone;
   if (ImGui::Button("Back to model selection", {button_width, 38.0f})) {
-    action = SetupAction::kBack;
+    action = shell::SetupAction::kBack;
   }
   ImGui::SameLine();
   if (ImGui::Button("Restore defaults", {button_width, 38.0f})) {
@@ -190,7 +183,7 @@ SetupAction DrawSetupScreen(tiny2d::sandbox::RollingDiskConfig* config) {
   ImGui::SameLine();
   ImGui::BeginDisabled(error != nullptr);
   if (ImGui::Button("Start simulation", {button_width, 38.0f})) {
-    action = SetupAction::kStart;
+    action = shell::SetupAction::kStart;
   }
   ImGui::EndDisabled();
 
@@ -458,140 +451,78 @@ bool DrawMonitor(const tiny2d::sandbox::RollingDiskConfig& config,
   return stop;
 }
 
+struct RollingDiskLabTraits {
+  using Config = tiny2d::sandbox::RollingDiskConfig;
+  using State = tiny2d::sandbox::RollingDiskState;
+  using Status = tiny2d::sandbox::RollingDiskStatus;
+  static constexpr float kPhysicsStep = ::kPhysicsStep;
+  static constexpr double kMaximumFrameTime = 0.25;
+  static constexpr const char* kInvalidHistoryTimeMessage =
+      "The rolling model produced an invalid history time.";
+  static constexpr const char* kNonIncreasingHistoryTimeMessage =
+      "The rolling model produced a non-increasing history time.";
+
+  Config MakeInitialConfig() { return Config{}; }
+  State MakeState(const Config& config) {
+    return tiny2d::sandbox::MakeInitialRollingDiskState(config);
+  }
+  const char* InitialStateIssue(const Config&, const State& state) {
+    if (state.status == Status::kAirborne) {
+      return "The initial compound-field configuration has no ramp contact.";
+    }
+    // Any other non-active start pauses without an error banner.
+    return state.status == Status::kActive ? nullptr : "";
+  }
+  bool CanStep(const State& state) { return state.status == Status::kActive; }
+  bool Step(const Config& config, State* state) {
+    return tiny2d::sandbox::StepRollingDisk(config, kPhysicsStep, state);
+  }
+  std::string StepFailureMessage(const Config& config, const State& state,
+                                 std::vector<State>* history) {
+    const char* error = nullptr;
+    if (state.status == Status::kAirborne) {
+      bool recorded = false;
+      if (!history->empty() &&
+          state.time_seconds == history->back().time_seconds) {
+        history->back() = state;
+        recorded = true;
+      } else {
+        recorded = tiny2d::sandbox::AppendHistorySample(history, state,
+                                                        &State::time_seconds);
+      }
+      error = recorded
+                  ? "The compound fields caused the body to lose ramp contact."
+                  : kNonIncreasingHistoryTimeMessage;
+    } else {
+      error = tiny2d::sandbox::GetRollingDiskStateError(config, state);
+    }
+    return error != nullptr ? error
+                            : "The fixed-step rolling model rejected this "
+                              "state.";
+  }
+  const char* AfterStepIssue(const State& state) {
+    // Reaching a ramp end pauses the run without an error banner.
+    return state.status == Status::kActive ? nullptr : "";
+  }
+  shell::SetupAction DrawSetup(Config* config, const std::string&) {
+    return DrawSetupScreen(config);
+  }
+  bool DrawFrame(const Config& config, const State& state,
+                 const std::vector<State>& history, bool* paused,
+                 double* inspect_time, bool* follow_live,
+                 const std::string& error) {
+    DrawScene(config, state);
+    return DrawMonitor(config, state, history, paused, inspect_time,
+                       follow_live, error.empty() ? nullptr : error.c_str());
+  }
+};
+
 }  // namespace
 
 namespace tiny2d::sandbox {
 
 SimulationResult RunRollingDiskSimulation(SDL_Renderer* renderer) {
-  if (renderer == nullptr) {
-    return SimulationResult::kBackToSelection;
-  }
-
-  RollingDiskConfig config;
-  RollingDiskState state = MakeInitialRollingDiskState(config);
-  std::vector<RollingDiskState> history;
-  bool simulation_started = false;
-  bool paused = false;
-  bool follow_live = true;
-  double inspect_time = 0.0;
-  const char* runtime_error = nullptr;
-  FixedStepClock clock(static_cast<double>(SDL_GetPerformanceFrequency()),
-                       SDL_GetPerformanceCounter());
-
-  while (true) {
-    bool return_requested = false;
-    SimulationResult return_result = SimulationResult::kBackToSelection;
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT) {
-        return_requested = true;
-        return_result = SimulationResult::kQuit;
-      } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-                 event.key.keysym.sym == SDLK_SPACE && simulation_started &&
-                 runtime_error == nullptr &&
-                 state.status == RollingDiskStatus::kActive) {
-        paused = !paused;
-      }
-    }
-
-    ImGui_ImplSDLRenderer2_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
-
-    const Uint64 current_time = SDL_GetPerformanceCounter();
-    if (!return_requested && !simulation_started) {
-      clock.Reset(current_time);
-      const SetupAction action = DrawSetupScreen(&config);
-      if (action == SetupAction::kBack) {
-        return_requested = true;
-      } else if (action == SetupAction::kStart) {
-        state = MakeInitialRollingDiskState(config);
-        history.clear();
-        const bool recorded = AppendHistorySample(
-            &history, state, &RollingDiskState::time_seconds);
-        simulation_started = true;
-        paused = !recorded || state.status != RollingDiskStatus::kActive;
-        follow_live = true;
-        inspect_time = 0.0;
-        runtime_error =
-            !recorded ? "The rolling model produced an invalid history time."
-            : state.status == RollingDiskStatus::kAirborne
-                ? "The initial compound-field configuration has no ramp "
-                  "contact."
-                : nullptr;
-        clock.Reset(current_time);
-      }
-    } else if (simulation_started) {
-      if (!return_requested && !paused && runtime_error == nullptr &&
-          state.status == RollingDiskStatus::kActive) {
-        clock.Accumulate(current_time, kMaximumFrameTime);
-        while (clock.HasStep(kPhysicsStep)) {
-          if (!StepRollingDisk(config, kPhysicsStep, &state)) {
-            if (state.status == RollingDiskStatus::kAirborne) {
-              if (!history.empty() &&
-                  state.time_seconds == history.back().time_seconds) {
-                history.back() = state;
-              } else if (!AppendHistorySample(
-                             &history, state,
-                             &RollingDiskState::time_seconds)) {
-                runtime_error =
-                    "The rolling model produced a non-increasing history "
-                    "time.";
-                paused = true;
-                clock.DiscardPendingSteps();
-                break;
-              }
-              runtime_error =
-                  "The compound fields caused the body to lose ramp contact.";
-            } else {
-              runtime_error = GetRollingDiskStateError(config, state);
-            }
-            if (runtime_error == nullptr) {
-              runtime_error =
-                  "The fixed-step rolling model rejected this state.";
-            }
-            paused = true;
-            clock.DiscardPendingSteps();
-            break;
-          }
-          if (!AppendHistorySample(&history, state,
-                                   &RollingDiskState::time_seconds)) {
-            runtime_error =
-                "The rolling model produced a non-increasing history time.";
-            paused = true;
-            clock.DiscardPendingSteps();
-            break;
-          }
-          clock.ConsumeStep(kPhysicsStep);
-          if (state.status != RollingDiskStatus::kActive) {
-            paused = true;
-            clock.DiscardPendingSteps();
-            break;
-          }
-        }
-      } else {
-        clock.Reset(current_time);
-      }
-
-      DrawScene(config, state);
-      if (!return_requested &&
-          DrawMonitor(config, state, history, &paused, &inspect_time,
-                      &follow_live, runtime_error)) {
-        return_requested = true;
-      }
-    }
-
-    ImGui::Render();
-    SDL_SetRenderDrawColor(renderer, 18, 20, 24, 255);
-    SDL_RenderClear(renderer);
-    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
-    SDL_RenderPresent(renderer);
-
-    if (return_requested) {
-      return return_result;
-    }
-  }
+  return shell::RunLab(renderer, RollingDiskLabTraits{});
 }
 
 }  // namespace tiny2d::sandbox

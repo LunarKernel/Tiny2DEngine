@@ -84,12 +84,13 @@ SimulationResult RunFrameLoop(SDL_Renderer* renderer, FrameFunction frame) {
 //   bool Step(const Config&, State*);                  // may throw
 //   std::string StepFailureMessage(const Config&, const State&,
 //                                  std::vector<State>* history);
-//   bool PauseAfterStep(const State&);
+//   const char* AfterStepIssue(const State&);          // nullptr: continue;
+//                                                      // "": pause; text:
+//                                                      // pause with error
 //   SetupAction DrawSetup(Config*, const std::string& error);
-//   void DrawScene(const Config&, const State&);
-//   bool DrawMonitor(const Config&, const State&, const std::vector<State>&,
-//                    bool* paused, double* inspect_time, bool* follow_live,
-//                    const std::string& error);         // true stops the lab
+//   bool DrawFrame(const Config&, const State&, const std::vector<State>&,
+//                  bool* paused, double* inspect_time, bool* follow_live,
+//                  const std::string& error);           // true stops the lab
 template <typename Traits>
 SimulationResult RunLab(SDL_Renderer* renderer, Traits traits) {
   if (renderer == nullptr) {
@@ -178,7 +179,9 @@ SimulationResult RunLab(SDL_Renderer* renderer, Traits traits) {
                 break;
               }
               clock.ConsumeStep(Traits::kPhysicsStep);
-              if (traits.PauseAfterStep(state)) {
+              const char* after_issue = traits.AfterStepIssue(state);
+              if (after_issue != nullptr) {
+                runtime_error = after_issue;
                 paused = true;
                 clock.DiscardPendingSteps();
                 break;
@@ -188,10 +191,9 @@ SimulationResult RunLab(SDL_Renderer* renderer, Traits traits) {
             clock.Reset(input.counter);
           }
 
-          traits.DrawScene(config, state);
           if (!return_requested &&
-              traits.DrawMonitor(config, state, history, &paused, &inspect_time,
-                                 &follow_live, runtime_error)) {
+              traits.DrawFrame(config, state, history, &paused, &inspect_time,
+                               &follow_live, runtime_error)) {
             return_requested = true;
           }
         }
