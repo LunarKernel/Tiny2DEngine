@@ -1,34 +1,25 @@
 #include <SDL.h>
 #include <imgui.h>
-#include <imgui_impl_sdl2.h>
-#include <imgui_impl_sdlrenderer2.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <string>
 #include <vector>
 
-#include "fixed_step_clock.h"
+#include "app/lab_shell.h"
 #include "rotation_pendulum_model.h"
 #include "sim_ui.h"
-#include "simulation_history.h"
 #include "simulations.h"
 
 namespace tiny2d::sandbox {
 namespace {
 
-constexpr double kPendulumMaximumFrameTime = 0.25;
 constexpr float kControlStart = 300.0f;
 constexpr float kSliderWidth = 320.0f;
 constexpr float kInputWidth = 110.0f;
-
-enum class PendulumSetupAction {
-  kNone,
-  kStart,
-  kBack,
-};
 
 PendulumConfig MakeDrivenPendulumConfig() {
   PendulumConfig config;
@@ -44,7 +35,7 @@ PendulumConfig MakeDrivenPendulumConfig() {
   return config;
 }
 
-PendulumSetupAction DrawPendulumSetupScreen(PendulumConfig* config) {
+shell::SetupAction DrawPendulumSetupScreen(PendulumConfig* config) {
   ImGuiIO& io = ImGui::GetIO();
   ImGui::SetNextWindowPos({0.0f, 0.0f});
   ImGui::SetNextWindowSize(io.DisplaySize);
@@ -160,9 +151,9 @@ PendulumSetupAction DrawPendulumSetupScreen(PendulumConfig* config) {
   const float spacing = ImGui::GetStyle().ItemSpacing.x;
   const float button_width =
       (ImGui::GetContentRegionAvail().x - 3.0f * spacing) / 4.0f;
-  PendulumSetupAction action = PendulumSetupAction::kNone;
+  shell::SetupAction action = shell::SetupAction::kNone;
   if (ImGui::Button("Back", {button_width, 38.0f})) {
-    action = PendulumSetupAction::kBack;
+    action = shell::SetupAction::kBack;
   }
   ImGui::SameLine();
   if (ImGui::Button("Load V10 baseline", {button_width, 38.0f})) {
@@ -175,7 +166,7 @@ PendulumSetupAction DrawPendulumSetupScreen(PendulumConfig* config) {
   ImGui::SameLine();
   ImGui::BeginDisabled(error != nullptr);
   if (ImGui::Button("Start", {button_width, 38.0f})) {
-    action = PendulumSetupAction::kStart;
+    action = shell::SetupAction::kStart;
   }
   ImGui::EndDisabled();
 
@@ -389,110 +380,53 @@ bool DrawPendulumMonitor(const PendulumConfig& config,
   return stop;
 }
 
+struct PendulumLabTraits {
+  using Config = PendulumConfig;
+  using State = PendulumState;
+  static constexpr float kPhysicsStep = kPendulumPhysicsStep;
+  static constexpr double kMaximumFrameTime = 0.25;
+  static constexpr const char* kInvalidHistoryTimeMessage =
+      "The pendulum produced an invalid history time.";
+  static constexpr const char* kNonIncreasingHistoryTimeMessage =
+      "The pendulum produced a non-increasing history time.";
+
+  Config MakeInitialConfig() { return MakeDrivenPendulumConfig(); }
+  State MakeState(const Config& config) {
+    return MakeInitialPendulumState(config);
+  }
+  const char* InitialStateIssue(const Config&, const State&) { return nullptr; }
+  bool CanStep(const State&) { return true; }
+  bool Step(const Config& config, State* state) {
+    return StepPendulum(config, kPhysicsStep, state);
+  }
+  std::string StepFailureMessage(const Config& config, const State& state,
+                                 std::vector<State>*) {
+    const char* error = GetPendulumStateError(config, state);
+    return error != nullptr
+               ? error
+               : "The fixed-step integrator rejected an unstable state.";
+  }
+  bool PauseAfterStep(const State&) { return false; }
+  shell::SetupAction DrawSetup(Config* config, const std::string&) {
+    return DrawPendulumSetupScreen(config);
+  }
+  void DrawScene(const Config& config, const State& state) {
+    DrawPendulumScene(config, state);
+  }
+  bool DrawMonitor(const Config& config, const State& state,
+                   const std::vector<State>& history, bool* paused,
+                   double* inspect_time, bool* follow_live,
+                   const std::string& error) {
+    return DrawPendulumMonitor(config, state, history, paused, inspect_time,
+                               follow_live,
+                               error.empty() ? nullptr : error.c_str());
+  }
+};
+
 }  // namespace
 
 SimulationResult RunRotationPendulumSimulation(SDL_Renderer* renderer) {
-  if (renderer == nullptr) {
-    return SimulationResult::kBackToSelection;
-  }
-
-  PendulumConfig config = MakeDrivenPendulumConfig();
-  PendulumState state = MakeInitialPendulumState(config);
-  std::vector<PendulumState> history;
-  bool simulation_started = false;
-  bool paused = false;
-  bool follow_live = true;
-  double inspect_time = 0.0;
-  const char* runtime_error = nullptr;
-  FixedStepClock clock(static_cast<double>(SDL_GetPerformanceFrequency()),
-                       SDL_GetPerformanceCounter());
-
-  while (true) {
-    bool return_requested = false;
-    SimulationResult return_result = SimulationResult::kBackToSelection;
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT) {
-        return_requested = true;
-        return_result = SimulationResult::kQuit;
-      } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-                 event.key.keysym.sym == SDLK_SPACE && simulation_started &&
-                 runtime_error == nullptr) {
-        paused = !paused;
-      }
-    }
-
-    ImGui_ImplSDLRenderer2_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
-
-    const Uint64 current_time = SDL_GetPerformanceCounter();
-    if (!return_requested && !simulation_started) {
-      clock.Reset(current_time);
-      const PendulumSetupAction action = DrawPendulumSetupScreen(&config);
-      if (action == PendulumSetupAction::kBack) {
-        return_requested = true;
-      } else if (action == PendulumSetupAction::kStart) {
-        state = MakeInitialPendulumState(config);
-        history.clear();
-        const bool recorded =
-            AppendHistorySample(&history, state, &PendulumState::time_seconds);
-        simulation_started = true;
-        paused = !recorded;
-        follow_live = true;
-        inspect_time = 0.0;
-        runtime_error = recorded
-                            ? nullptr
-                            : "The pendulum produced an invalid history time.";
-        clock.Reset(current_time);
-      }
-    } else if (simulation_started) {
-      if (!return_requested && !paused && runtime_error == nullptr) {
-        clock.Accumulate(current_time, kPendulumMaximumFrameTime);
-        while (clock.HasStep(kPendulumPhysicsStep)) {
-          if (!StepPendulum(config, kPendulumPhysicsStep, &state)) {
-            runtime_error = GetPendulumStateError(config, state);
-            if (runtime_error == nullptr) {
-              runtime_error =
-                  "The fixed-step integrator rejected an unstable state.";
-            }
-            paused = true;
-            clock.DiscardPendingSteps();
-            break;
-          }
-          if (!AppendHistorySample(&history, state,
-                                   &PendulumState::time_seconds)) {
-            runtime_error =
-                "The pendulum produced a non-increasing history time.";
-            paused = true;
-            clock.DiscardPendingSteps();
-            break;
-          }
-          clock.ConsumeStep(kPendulumPhysicsStep);
-        }
-      } else {
-        clock.Reset(current_time);
-      }
-
-      DrawPendulumScene(config, state);
-      if (!return_requested &&
-          DrawPendulumMonitor(config, state, history, &paused, &inspect_time,
-                              &follow_live, runtime_error)) {
-        return_requested = true;
-      }
-    }
-
-    ImGui::Render();
-    SDL_SetRenderDrawColor(renderer, 18, 20, 24, 255);
-    SDL_RenderClear(renderer);
-    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
-    SDL_RenderPresent(renderer);
-
-    if (return_requested) {
-      return return_result;
-    }
-  }
+  return shell::RunLab(renderer, PendulumLabTraits{});
 }
 
 }  // namespace tiny2d::sandbox
