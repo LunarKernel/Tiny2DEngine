@@ -1,385 +1,51 @@
 #include <SDL.h>
 #include <imgui.h>
-#include <imgui_impl_sdl2.h>
-#include <imgui_impl_sdlrenderer2.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
-#include <limits>
+#include <string>
 #include <vector>
 
+#include "app/lab_shell.h"
+#include "rotation_pendulum_model.h"
+#include "sim_ui.h"
 #include "simulations.h"
 
+namespace tiny2d::sandbox {
 namespace {
 
-constexpr float kPendulumPi = 3.14159265358979323846f;
-constexpr float kPendulumDegreesToRadians = kPendulumPi / 180.0f;
-constexpr float kPendulumRadiansToDegrees = 180.0f / kPendulumPi;
-constexpr float kPendulumPhysicsStep = 1.0f / 240.0f;
-constexpr float kPendulumMaximumAnglePerStep = 0.25f;
-constexpr double kPendulumMaximumFrameTime = 0.25;
+constexpr float kControlStart = 300.0f;
+constexpr float kSliderWidth = 320.0f;
+constexpr float kInputWidth = 110.0f;
 
-constexpr float kMinimumRodLength = 0.1f;
-constexpr float kMaximumRodLength = 20.0f;
-constexpr float kMinimumMass = 0.01f;
-constexpr float kMaximumMass = 1000.0f;
-constexpr float kMaximumChargeMagnitude = 1000.0f;
-constexpr float kMaximumElectricField = 1000000.0f;
-constexpr float kMaximumDamping = 1000.0f;
-constexpr float kMaximumInitialAngularSpeed = 50.0f;
-
-struct PendulumConfig {
-  float rod_length_m{2.0f};
-  float rod_mass_kg{2.0f};
-  float counterweight_mass_kg{1.0f};
-  float counterweight_distance_m{1.5f};
-  float counterweight_charge_c{1.0f};
-  float initial_angle_degrees{35.0f};
-  float initial_angular_velocity_rad_s{};
-  float gravity_m_s2{9.8f};
-  bool electric_field_enabled{true};
-  bool counterweight_charged{true};
-  float electric_field_strength_n_c{5.0f};
-  float electric_field_angle_degrees{};
-  bool damping_enabled{};
-  float damping_coefficient_n_m_s{0.1f};
-};
-
-struct PendulumState {
-  float angle_radians{};
-  float angular_velocity_rad_s{};
-  float angular_acceleration_rad_s2{};
-  float time_seconds{};
-};
-
-struct PendulumDerived {
-  float moment_of_inertia_kg_m2{};
-  float gravity_torque_n_m{};
-  float electric_torque_n_m{};
-  float damping_torque_n_m{};
-  float total_torque_n_m{};
-  float angular_acceleration_rad_s2{};
-  float kinetic_energy_j{};
-  float gravitational_potential_energy_j{};
-  float electric_potential_energy_j{};
-  float total_energy_j{};
-};
-
-enum class PendulumSetupAction {
-  kNone,
-  kStart,
-  kBack,
-};
-
-float GetPendulumFieldAngle(const PendulumConfig& config) {
-  return config.electric_field_angle_degrees * kPendulumDegreesToRadians;
+PendulumConfig MakeDrivenPendulumConfig() {
+  PendulumConfig config;
+  config.initial_angle_degrees = 0.0f;
+  config.initial_angular_velocity_rad_s = 0.0f;
+  config.electric_field_enabled = false;
+  config.damping_enabled = true;
+  config.damping_coefficient_n_m_s = 1.0f;
+  config.drive_enabled = true;
+  config.drive_torque_amplitude_n_m = 2.0f;
+  config.drive_angular_frequency_rad_s =
+      2.0f * kPendulumPi / GetSmallAnglePeriod(config);
+  return config;
 }
 
-float GetPendulumMomentOfInertia(const PendulumConfig& config) {
-  return config.rod_mass_kg * config.rod_length_m * config.rod_length_m / 3.0f +
-         config.counterweight_mass_kg * config.counterweight_distance_m *
-             config.counterweight_distance_m;
-}
-
-float GetPendulumGravityTorqueScale(const PendulumConfig& config) {
-  return config.gravity_m_s2 *
-         (config.rod_mass_kg * config.rod_length_m * 0.5f +
-          config.counterweight_mass_kg * config.counterweight_distance_m);
-}
-
-float GetPendulumElectricTorqueScale(const PendulumConfig& config) {
-  if (!config.electric_field_enabled || !config.counterweight_charged) {
-    return 0.0f;
-  }
-  return config.counterweight_charge_c * config.counterweight_distance_m *
-         config.electric_field_strength_n_c;
-}
-
-float GetPendulumRestoringTorqueMagnitude(const PendulumConfig& config) {
-  const float gravity_scale = GetPendulumGravityTorqueScale(config);
-  const float electric_scale = GetPendulumElectricTorqueScale(config);
-  const float field_angle = GetPendulumFieldAngle(config);
-  return std::hypot(-gravity_scale + electric_scale * std::sin(field_angle),
-                    electric_scale * std::cos(field_angle));
-}
-
-float GetSmallAnglePeriod(const PendulumConfig& config) {
-  const float restoring_torque = GetPendulumRestoringTorqueMagnitude(config);
-  const float moment_of_inertia = GetPendulumMomentOfInertia(config);
-  if (!std::isfinite(restoring_torque) || restoring_torque <= 0.0f ||
-      !std::isfinite(moment_of_inertia) || moment_of_inertia <= 0.0f) {
-    return std::numeric_limits<float>::infinity();
-  }
-  return 2.0f * kPendulumPi * std::sqrt(moment_of_inertia / restoring_torque);
-}
-
-PendulumDerived CalculatePendulumDerived(const PendulumConfig& config,
-                                         const PendulumState& state) {
-  PendulumDerived derived;
-  derived.moment_of_inertia_kg_m2 = GetPendulumMomentOfInertia(config);
-
-  const float gravity_scale = GetPendulumGravityTorqueScale(config);
-  const float electric_scale = GetPendulumElectricTorqueScale(config);
-  const float field_angle = GetPendulumFieldAngle(config);
-  derived.gravity_torque_n_m = -gravity_scale * std::sin(state.angle_radians);
-  derived.electric_torque_n_m =
-      electric_scale * std::cos(state.angle_radians - field_angle);
-  derived.damping_torque_n_m =
-      config.damping_enabled
-          ? -config.damping_coefficient_n_m_s * state.angular_velocity_rad_s
-          : 0.0f;
-  derived.total_torque_n_m = derived.gravity_torque_n_m +
-                             derived.electric_torque_n_m +
-                             derived.damping_torque_n_m;
-  derived.angular_acceleration_rad_s2 =
-      derived.total_torque_n_m / derived.moment_of_inertia_kg_m2;
-
-  derived.kinetic_energy_j = 0.5f * derived.moment_of_inertia_kg_m2 *
-                             state.angular_velocity_rad_s *
-                             state.angular_velocity_rad_s;
-  derived.gravitational_potential_energy_j =
-      gravity_scale * (1.0f - std::cos(state.angle_radians));
-  derived.electric_potential_energy_j =
-      -electric_scale * std::sin(state.angle_radians - field_angle);
-  derived.total_energy_j = derived.kinetic_energy_j +
-                           derived.gravitational_potential_energy_j +
-                           derived.electric_potential_energy_j;
-  return derived;
-}
-
-bool IsPendulumDerivedFinite(const PendulumDerived& derived) {
-  const std::array<float, 10> values = {
-      derived.moment_of_inertia_kg_m2,
-      derived.gravity_torque_n_m,
-      derived.electric_torque_n_m,
-      derived.damping_torque_n_m,
-      derived.total_torque_n_m,
-      derived.angular_acceleration_rad_s2,
-      derived.kinetic_energy_j,
-      derived.gravitational_potential_energy_j,
-      derived.electric_potential_energy_j,
-      derived.total_energy_j,
-  };
-  return std::all_of(values.begin(), values.end(),
-                     [](float value) { return std::isfinite(value); });
-}
-
-PendulumState MakeInitialPendulumState(const PendulumConfig& config) {
-  PendulumState state;
-  state.angle_radians =
-      config.initial_angle_degrees * kPendulumDegreesToRadians;
-  state.angular_velocity_rad_s = config.initial_angular_velocity_rad_s;
-  state.angular_acceleration_rad_s2 =
-      CalculatePendulumDerived(config, state).angular_acceleration_rad_s2;
-  return state;
-}
-
-const PendulumState* FindPendulumState(
-    const std::vector<PendulumState>& history, float time_seconds) {
-  if (history.empty() || !std::isfinite(time_seconds)) {
-    return nullptr;
-  }
-  const auto next =
-      std::lower_bound(history.begin(), history.end(), time_seconds,
-                       [](const PendulumState& state, float target_time) {
-                         return state.time_seconds < target_time;
-                       });
-  if (next == history.begin()) {
-    return &history.front();
-  }
-  if (next == history.end()) {
-    return &history.back();
-  }
-  const auto previous = next - 1;
-  return time_seconds - previous->time_seconds <=
-                 next->time_seconds - time_seconds
-             ? &*previous
-             : &*next;
-}
-
-const char* GetPendulumStateError(const PendulumConfig& config,
-                                  const PendulumState& state) {
-  const std::array<float, 4> values = {
-      state.angle_radians,
-      state.angular_velocity_rad_s,
-      state.angular_acceleration_rad_s2,
-      state.time_seconds,
-  };
-  if (!std::all_of(values.begin(), values.end(),
-                   [](float value) { return std::isfinite(value); })) {
-    return "The pendulum state contains NaN or infinity.";
-  }
-  if (state.time_seconds < 0.0f) {
-    return "The pendulum time cannot be negative.";
-  }
-  if (std::abs(state.angular_velocity_rad_s) * kPendulumPhysicsStep >
-          kPendulumMaximumAnglePerStep ||
-      std::abs(state.angular_acceleration_rad_s2) * kPendulumPhysicsStep *
-              kPendulumPhysicsStep >
-          kPendulumMaximumAnglePerStep) {
-    return "The pendulum is moving too fast for the fixed physics step.";
-  }
-  if (!IsPendulumDerivedFinite(CalculatePendulumDerived(config, state))) {
-    return "A derived pendulum value is NaN or infinite.";
-  }
-  return nullptr;
-}
-
-const char* GetPendulumConfigError(const PendulumConfig& config) {
-  const std::array<float, 11> values = {
-      config.rod_length_m,
-      config.rod_mass_kg,
-      config.counterweight_mass_kg,
-      config.counterweight_distance_m,
-      config.counterweight_charge_c,
-      config.initial_angle_degrees,
-      config.initial_angular_velocity_rad_s,
-      config.gravity_m_s2,
-      config.electric_field_strength_n_c,
-      config.electric_field_angle_degrees,
-      config.damping_coefficient_n_m_s,
-  };
-  if (!std::all_of(values.begin(), values.end(),
-                   [](float value) { return std::isfinite(value); })) {
-    return "All inputs must be finite numbers; NaN and infinity are invalid.";
-  }
-  if (config.rod_length_m < kMinimumRodLength ||
-      config.rod_length_m > kMaximumRodLength) {
-    return "Rod length must be between 0.1 m and 20 m.";
-  }
-  if (config.rod_mass_kg < kMinimumMass || config.rod_mass_kg > kMaximumMass ||
-      config.counterweight_mass_kg < kMinimumMass ||
-      config.counterweight_mass_kg > kMaximumMass) {
-    return "Rod and counterweight masses must be positive and at most 1000 kg.";
-  }
-  if (config.counterweight_distance_m < 0.0f ||
-      config.counterweight_distance_m > config.rod_length_m) {
-    return "Counterweight distance r must be between the pivot and rod end.";
-  }
-  if (std::abs(config.counterweight_charge_c) > kMaximumChargeMagnitude) {
-    return "Counterweight charge must be between -1000 C and 1000 C.";
-  }
-  if (config.initial_angle_degrees < -180.0f ||
-      config.initial_angle_degrees > 180.0f ||
-      std::abs(config.initial_angular_velocity_rad_s) >
-          kMaximumInitialAngularSpeed) {
-    return "Initial angle or angular velocity is outside the supported range.";
-  }
-  if (config.gravity_m_s2 != 9.8f && config.gravity_m_s2 != 10.0f) {
-    return "Gravity must be either 9.8 or 10 m/s^2.";
-  }
-  if (config.electric_field_strength_n_c < 0.0f ||
-      config.electric_field_strength_n_c > kMaximumElectricField ||
-      config.electric_field_angle_degrees < -180.0f ||
-      config.electric_field_angle_degrees > 180.0f) {
-    return "Electric field strength or angle is outside the supported range.";
-  }
-  if (config.damping_coefficient_n_m_s < 0.0f ||
-      config.damping_coefficient_n_m_s > kMaximumDamping) {
-    return "Rotational damping must be between 0 and 1000 N*m*s/rad.";
-  }
-
-  const float moment_of_inertia = GetPendulumMomentOfInertia(config);
-  const float restoring_torque = GetPendulumRestoringTorqueMagnitude(config);
-  const float small_angle_period = GetSmallAnglePeriod(config);
-  const PendulumState initial_state = MakeInitialPendulumState(config);
-  if (!std::isfinite(moment_of_inertia) || moment_of_inertia <= 0.0f ||
-      !std::isfinite(restoring_torque) || restoring_torque <= 0.000001f ||
-      !std::isfinite(small_angle_period) ||
-      !IsPendulumDerivedFinite(
-          CalculatePendulumDerived(config, initial_state))) {
-    return "The selected values do not produce finite pendulum quantities.";
-  }
-
-  const float maximum_angular_speed =
-      std::sqrt(config.initial_angular_velocity_rad_s *
-                    config.initial_angular_velocity_rad_s +
-                4.0f * restoring_torque / moment_of_inertia);
-  const float maximum_angular_acceleration =
-      restoring_torque / moment_of_inertia +
-      (config.damping_enabled ? config.damping_coefficient_n_m_s *
-                                    maximum_angular_speed / moment_of_inertia
-                              : 0.0f);
-  if (!std::isfinite(maximum_angular_speed) ||
-      !std::isfinite(maximum_angular_acceleration) ||
-      maximum_angular_speed * kPendulumPhysicsStep >
-          kPendulumMaximumAnglePerStep ||
-      maximum_angular_acceleration * kPendulumPhysicsStep *
-              kPendulumPhysicsStep >
-          kPendulumMaximumAnglePerStep ||
-      (config.damping_enabled && config.damping_coefficient_n_m_s *
-                                         kPendulumPhysicsStep /
-                                         moment_of_inertia >=
-                                     1.0f)) {
-    return "This parameter combination is too fast or stiff for stable "
-           "integration.";
-  }
-  return nullptr;
-}
-
-bool StepPendulum(const PendulumConfig& config, float delta_time,
-                  PendulumState* state) {
-  if (state == nullptr || !std::isfinite(delta_time) || delta_time <= 0.0f) {
-    return false;
-  }
-  const PendulumDerived before = CalculatePendulumDerived(config, *state);
-  if (!IsPendulumDerivedFinite(before) ||
-      std::abs(state->angular_velocity_rad_s) * delta_time >
-          kPendulumMaximumAnglePerStep ||
-      std::abs(before.angular_acceleration_rad_s2) * delta_time * delta_time >
-          kPendulumMaximumAnglePerStep) {
-    return false;
-  }
-
-  state->angular_velocity_rad_s +=
-      before.angular_acceleration_rad_s2 * delta_time;
-  state->angle_radians = std::remainder(
-      state->angle_radians + state->angular_velocity_rad_s * delta_time,
-      2.0f * kPendulumPi);
-  state->time_seconds += delta_time;
-  state->angular_acceleration_rad_s2 =
-      CalculatePendulumDerived(config, *state).angular_acceleration_rad_s2;
-  return GetPendulumStateError(config, *state) == nullptr;
-}
-
-bool PendulumSliderInputFloat(const char* label, float* value, float minimum,
-                              float maximum, const char* format,
-                              ImGuiSliderFlags flags = ImGuiSliderFlags_None) {
-  constexpr float kControlStart = 300.0f;
-  constexpr float kSliderWidth = 320.0f;
-  constexpr float kInputWidth = 110.0f;
-
-  ImGui::PushID(label);
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted(label);
-  ImGui::SameLine(kControlStart);
-  ImGui::SetNextItemWidth(kSliderWidth);
-  bool changed = ImGui::SliderFloat("##slider", value, minimum, maximum, format,
-                                    flags | ImGuiSliderFlags_AlwaysClamp);
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(kInputWidth);
-  changed |= ImGui::InputFloat("##input", value, 0.0f, 0.0f, format);
-  if (std::isfinite(*value)) {
-    *value = std::clamp(*value, minimum, maximum);
-  }
-  ImGui::PopID();
-  return changed;
-}
-
-PendulumSetupAction DrawPendulumSetupScreen(PendulumConfig* config) {
+shell::SetupAction DrawPendulumSetupScreen(PendulumConfig* config) {
   ImGuiIO& io = ImGui::GetIO();
   ImGui::SetNextWindowPos({0.0f, 0.0f});
   ImGui::SetNextWindowSize(io.DisplaySize);
   constexpr ImGuiWindowFlags kWindowFlags = ImGuiWindowFlags_NoDecoration |
                                             ImGuiWindowFlags_NoMove |
                                             ImGuiWindowFlags_NoSavedSettings;
-  ImGui::Begin("PivotLab setup", nullptr, kWindowFlags);
+  ImGui::Begin("Driven PivotLab setup", nullptr, kWindowFlags);
 
   ImGui::TextColored({0.35f, 0.75f, 1.0f, 1.0f},
-                     "PivotLab: charged physical pendulum");
+                     "V14 Driven PivotLab: forced damped physical pendulum");
   ImGui::TextDisabled(
       "Drag a slider or type an exact SI value. Out-of-range finite values "
       "are clamped.");
@@ -387,29 +53,32 @@ PendulumSetupAction DrawPendulumSetupScreen(PendulumConfig* config) {
 
   ImGui::TextUnformatted("Pendulum");
   ImGui::Separator();
-  PendulumSliderInputFloat("Rod length L (m)", &config->rod_length_m,
-                           kMinimumRodLength, kMaximumRodLength, "%.3f",
-                           ImGuiSliderFlags_Logarithmic);
-  PendulumSliderInputFloat("Rod mass M (kg)", &config->rod_mass_kg,
-                           kMinimumMass, kMaximumMass, "%.3f",
-                           ImGuiSliderFlags_Logarithmic);
-  PendulumSliderInputFloat("Counterweight mass m (kg)",
-                           &config->counterweight_mass_kg, kMinimumMass,
-                           kMaximumMass, "%.3f", ImGuiSliderFlags_Logarithmic);
+  ui::SliderInputFloat("Rod length L (m)", &config->rod_length_m,
+                       kMinimumRodLength, kMaximumRodLength, "%.3f",
+                       kControlStart, kSliderWidth, kInputWidth,
+                       ImGuiSliderFlags_Logarithmic);
+  ui::SliderInputFloat("Rod mass M (kg)", &config->rod_mass_kg, kMinimumMass,
+                       kMaximumMass, "%.3f", kControlStart, kSliderWidth,
+                       kInputWidth, ImGuiSliderFlags_Logarithmic);
+  ui::SliderInputFloat("Counterweight mass m (kg)",
+                       &config->counterweight_mass_kg, kMinimumMass,
+                       kMaximumMass, "%.3f", kControlStart, kSliderWidth,
+                       kInputWidth, ImGuiSliderFlags_Logarithmic);
   const float rod_length_for_control =
       std::isfinite(config->rod_length_m)
           ? std::clamp(config->rod_length_m, kMinimumRodLength,
                        kMaximumRodLength)
           : kMaximumRodLength;
-  PendulumSliderInputFloat("Counterweight distance r (m)",
-                           &config->counterweight_distance_m, 0.0f,
-                           rod_length_for_control, "%.3f");
-  PendulumSliderInputFloat("Initial angle from vertical down, CCW (degrees)",
-                           &config->initial_angle_degrees, -180.0f, 180.0f,
-                           "%.2f");
-  PendulumSliderInputFloat(
+  ui::SliderInputFloat(
+      "Counterweight distance r (m)", &config->counterweight_distance_m, 0.0f,
+      rod_length_for_control, "%.3f", kControlStart, kSliderWidth, kInputWidth);
+  ui::SliderInputFloat("Initial angle from vertical down, CCW (degrees)",
+                       &config->initial_angle_degrees, -180.0f, 180.0f, "%.2f",
+                       kControlStart, kSliderWidth, kInputWidth);
+  ui::SliderInputFloat(
       "Initial angular speed (rad/s)", &config->initial_angular_velocity_rad_s,
-      -kMaximumInitialAngularSpeed, kMaximumInitialAngularSpeed, "%.3f");
+      -kMaximumInitialAngularSpeed, kMaximumInitialAngularSpeed, "%.3f",
+      kControlStart, kSliderWidth, kInputWidth);
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("Gravity g (m/s^2)");
   ImGui::SameLine(300.0f);
@@ -429,79 +98,80 @@ PendulumSetupAction DrawPendulumSetupScreen(PendulumConfig* config) {
   ImGui::Checkbox("Counterweight carries charge",
                   &config->counterweight_charged);
   ImGui::BeginDisabled(!config->counterweight_charged);
-  PendulumSliderInputFloat(
-      "Counterweight charge q (C)", &config->counterweight_charge_c,
-      -kMaximumChargeMagnitude, kMaximumChargeMagnitude, "%.6g");
+  ui::SliderInputFloat("Counterweight charge q (C)",
+                       &config->counterweight_charge_c,
+                       -kMaximumChargeMagnitude, kMaximumChargeMagnitude,
+                       "%.6g", kControlStart, kSliderWidth, kInputWidth);
   ImGui::EndDisabled();
-  PendulumSliderInputFloat(
-      "Electric field E (N/C)", &config->electric_field_strength_n_c, 0.0f,
-      kMaximumElectricField, "%.6g", ImGuiSliderFlags_Logarithmic);
-  PendulumSliderInputFloat("E angle from +X, CCW (degrees)",
-                           &config->electric_field_angle_degrees, -180.0f,
-                           180.0f, "%.2f");
+  ui::SliderInputFloat("Electric field E (N/C)",
+                       &config->electric_field_strength_n_c, 0.0f,
+                       kMaximumElectricField, "%.6g", kControlStart,
+                       kSliderWidth, kInputWidth, ImGuiSliderFlags_Logarithmic);
+  ui::SliderInputFloat("E angle from +X, CCW (degrees)",
+                       &config->electric_field_angle_degrees, -180.0f, 180.0f,
+                       "%.2f", kControlStart, kSliderWidth, kInputWidth);
   ImGui::EndDisabled();
 
   ImGui::Spacing();
   ImGui::Checkbox("Enable linear rotational damping", &config->damping_enabled);
   ImGui::BeginDisabled(!config->damping_enabled);
-  PendulumSliderInputFloat("Damping c (N*m*s/rad)",
-                           &config->damping_coefficient_n_m_s, 0.0f,
-                           kMaximumDamping, "%.4g");
+  ui::SliderInputFloat(
+      "Damping c (N*m*s/rad)", &config->damping_coefficient_n_m_s, 0.0f,
+      kMaximumDamping, "%.4g", kControlStart, kSliderWidth, kInputWidth);
+  ImGui::EndDisabled();
+
+  ImGui::Spacing();
+  ImGui::TextUnformatted("Periodic driving torque");
+  ImGui::Separator();
+  ImGui::Checkbox("Enable periodic drive", &config->drive_enabled);
+  ImGui::BeginDisabled(!config->drive_enabled);
+  ui::SliderInputFloat(
+      "Drive amplitude A (N*m)", &config->drive_torque_amplitude_n_m, 0.0f,
+      kMaximumDriveTorque, "%.4g", kControlStart, kSliderWidth, kInputWidth);
+  ui::SliderInputFloat("Drive angular frequency omega_d (rad/s)",
+                       &config->drive_angular_frequency_rad_s, 0.0f,
+                       kMaximumDriveAngularFrequency, "%.4g", kControlStart,
+                       kSliderWidth, kInputWidth);
+  ImGui::TextDisabled(
+      "tau_drive(t) = A cos(omega_d t); positive torque is CCW.");
   ImGui::EndDisabled();
 
   const char* error = GetPendulumConfigError(*config);
   if (error == nullptr) {
+    const float small_angle_period = GetSmallAnglePeriod(*config);
     ImGui::TextColored({0.35f, 0.85f, 0.45f, 1.0f},
-                       "Ready | I = %.4f kg*m^2 | small-oscillation T = %.4f s",
-                       GetPendulumMomentOfInertia(*config),
-                       GetSmallAnglePeriod(*config));
+                       "Ready | I = %.4f kg*m^2 | T0 = %.4f s | omega0 = %.4f "
+                       "rad/s",
+                       GetPendulumMomentOfInertia(*config), small_angle_period,
+                       2.0f * kPendulumPi / small_angle_period);
   } else {
     ImGui::TextColored({1.0f, 0.35f, 0.35f, 1.0f}, "%s", error);
   }
 
   const float spacing = ImGui::GetStyle().ItemSpacing.x;
   const float button_width =
-      (ImGui::GetContentRegionAvail().x - 2.0f * spacing) / 3.0f;
-  PendulumSetupAction action = PendulumSetupAction::kNone;
-  if (ImGui::Button("Back to model selection", {button_width, 38.0f})) {
-    action = PendulumSetupAction::kBack;
+      (ImGui::GetContentRegionAvail().x - 3.0f * spacing) / 4.0f;
+  shell::SetupAction action = shell::SetupAction::kNone;
+  if (ImGui::Button("Back", {button_width, 38.0f})) {
+    action = shell::SetupAction::kBack;
   }
   ImGui::SameLine();
-  if (ImGui::Button("Restore defaults", {button_width, 38.0f})) {
+  if (ImGui::Button("Load V10 baseline", {button_width, 38.0f})) {
     *config = PendulumConfig{};
   }
   ImGui::SameLine();
+  if (ImGui::Button("Load V14 resonance preset", {button_width, 38.0f})) {
+    *config = MakeDrivenPendulumConfig();
+  }
+  ImGui::SameLine();
   ImGui::BeginDisabled(error != nullptr);
-  if (ImGui::Button("Start simulation", {button_width, 38.0f})) {
-    action = PendulumSetupAction::kStart;
+  if (ImGui::Button("Start", {button_width, 38.0f})) {
+    action = shell::SetupAction::kStart;
   }
   ImGui::EndDisabled();
 
   ImGui::End();
   return action;
-}
-
-void DrawPendulumArrow(ImDrawList* draw_list, ImVec2 start, ImVec2 direction,
-                       float length, ImU32 color) {
-  const float direction_length = std::hypot(direction.x, direction.y);
-  if (direction_length <= 0.0f) {
-    return;
-  }
-  direction.x /= direction_length;
-  direction.y /= direction_length;
-  const ImVec2 end{start.x + direction.x * length,
-                   start.y + direction.y * length};
-  draw_list->AddLine(start, end, color, 3.0f);
-  const ImVec2 normal{-direction.y, direction.x};
-  constexpr float kHeadLength = 13.0f;
-  constexpr float kHeadWidth = 7.0f;
-  draw_list->AddTriangleFilled(
-      end,
-      {end.x - direction.x * kHeadLength + normal.x * kHeadWidth,
-       end.y - direction.y * kHeadLength + normal.y * kHeadWidth},
-      {end.x - direction.x * kHeadLength - normal.x * kHeadWidth,
-       end.y - direction.y * kHeadLength - normal.y * kHeadWidth},
-      color);
 }
 
 void DrawPendulumScene(const PendulumConfig& config,
@@ -565,7 +235,7 @@ void DrawPendulumScene(const PendulumConfig& config,
     const ImVec2 field_start{
         field_center.x - field_direction.x * kFieldArrowLength * 0.5f,
         field_center.y - field_direction.y * kFieldArrowLength * 0.5f};
-    DrawPendulumArrow(draw_list, field_start, field_direction,
+    ui::DrawArrowFrom(draw_list, field_start, field_direction,
                       kFieldArrowLength, IM_COL32(100, 225, 150, 255));
     char field_label[80];
     std::snprintf(field_label, sizeof(field_label),
@@ -582,7 +252,7 @@ void DrawPendulumScene(const PendulumConfig& config,
   const ImVec2 gravity_start{
       gravity_center.x - kGravityDirection.x * kGravityArrowLength * 0.5f,
       gravity_center.y - kGravityDirection.y * kGravityArrowLength * 0.5f};
-  DrawPendulumArrow(draw_list, gravity_start, kGravityDirection,
+  ui::DrawArrowFrom(draw_list, gravity_start, kGravityDirection,
                     kGravityArrowLength, IM_COL32(245, 190, 90, 255));
   char gravity_label[64];
   std::snprintf(gravity_label, sizeof(gravity_label),
@@ -594,14 +264,14 @@ void DrawPendulumScene(const PendulumConfig& config,
 bool DrawPendulumMonitor(const PendulumConfig& config,
                          const PendulumState& current_state,
                          const std::vector<PendulumState>& history,
-                         bool* paused, float* inspect_time, bool* follow_live,
+                         bool* paused, double* inspect_time, bool* follow_live,
                          const char* runtime_error) {
   ImGui::SetNextWindowPos({12.0f, 12.0f});
-  ImGui::SetNextWindowSize({410.0f, 560.0f});
+  ImGui::SetNextWindowSize({430.0f, 650.0f});
   constexpr ImGuiWindowFlags kWindowFlags =
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
-  ImGui::Begin("PivotLab monitor", nullptr, kWindowFlags);
+  ImGui::Begin("Driven PivotLab monitor", nullptr, kWindowFlags);
 
   ImGui::TextColored(*paused ? ImVec4{1.0f, 0.7f, 0.25f, 1.0f}
                              : ImVec4{0.35f, 0.9f, 0.5f, 1.0f},
@@ -620,21 +290,23 @@ bool DrawPendulumMonitor(const PendulumConfig& config,
   ImGui::SameLine();
   ImGui::TextUnformatted("Inspect time");
   ImGui::SameLine();
-  const float maximum_inspect_time =
-      std::max(current_state.time_seconds, kPendulumPhysicsStep);
+  const double maximum_inspect_time = std::max(
+      current_state.time_seconds, static_cast<double>(kPendulumPhysicsStep));
   ImGui::SetNextItemWidth(140.0f);
-  bool inspect_time_changed = ImGui::SliderFloat(
-      "##history_slider", inspect_time, 0.0f, maximum_inspect_time, "%.3f",
+  constexpr double kMinimumInspectTime = 0.0;
+  bool inspect_time_changed = ImGui::SliderScalar(
+      "##history_slider", ImGuiDataType_Double, inspect_time,
+      &kMinimumInspectTime, &maximum_inspect_time, "%.3f",
       ImGuiSliderFlags_AlwaysClamp);
   ImGui::SameLine();
   ImGui::SetNextItemWidth(70.0f);
   inspect_time_changed |=
-      ImGui::InputFloat("##history_input", inspect_time, 0.0f, 0.0f, "%.3f");
+      ImGui::InputDouble("##history_input", inspect_time, 0.0, 0.0, "%.3f");
   if (inspect_time_changed) {
     if (!std::isfinite(*inspect_time)) {
       *inspect_time = current_state.time_seconds;
     }
-    *inspect_time = std::clamp(*inspect_time, 0.0f, current_state.time_seconds);
+    *inspect_time = std::clamp(*inspect_time, 0.0, current_state.time_seconds);
     *follow_live = false;
   }
 
@@ -652,7 +324,21 @@ bool DrawPendulumMonitor(const PendulumConfig& config,
   ImGui::Text("alpha: %+.6f rad/s^2",
               inspected_state->angular_acceleration_rad_s2);
   ImGui::Text("I: %.6f kg*m^2", derived.moment_of_inertia_kg_m2);
-  ImGui::Text("Small-oscillation period: %.6f s", GetSmallAnglePeriod(config));
+  const float small_angle_period = GetSmallAnglePeriod(config);
+  const float natural_angular_frequency =
+      2.0f * kPendulumPi / small_angle_period;
+  ImGui::Text("Small-oscillation period: %.6f s", small_angle_period);
+  ImGui::Text("Natural omega0: %.6f rad/s", natural_angular_frequency);
+  if (config.drive_enabled) {
+    ImGui::Text("Drive: A = %.6f N*m | omega_d = %.6f rad/s",
+                config.drive_torque_amplitude_n_m,
+                config.drive_angular_frequency_rad_s);
+    ImGui::Text(
+        "Frequency ratio omega_d/omega0: %.6f",
+        config.drive_angular_frequency_rad_s / natural_angular_frequency);
+  } else {
+    ImGui::TextDisabled("Periodic drive disabled (V10 behavior)");
+  }
 
   ImGui::Spacing();
   ImGui::TextUnformatted("Torques (N*m)");
@@ -660,16 +346,22 @@ bool DrawPendulumMonitor(const PendulumConfig& config,
   ImGui::Text("gravity: %+.6f", derived.gravity_torque_n_m);
   ImGui::Text("electric: %+.6f", derived.electric_torque_n_m);
   ImGui::Text("damping: %+.6f", derived.damping_torque_n_m);
+  ImGui::Text("drive: %+.6f", derived.driving_torque_n_m);
   ImGui::Text("total: %+.6f", derived.total_torque_n_m);
+  ImGui::Text("instantaneous drive power: %+.6f W", derived.driving_power_w);
 
   ImGui::Spacing();
-  ImGui::TextUnformatted("Energy (J)");
+  ImGui::TextUnformatted("Mechanical energy (J)");
   ImGui::Separator();
   ImGui::Text("kinetic: %+.6f", derived.kinetic_energy_j);
   ImGui::Text("gravity potential: %+.6f",
               derived.gravitational_potential_energy_j);
   ImGui::Text("electric potential: %+.6f", derived.electric_potential_energy_j);
-  ImGui::Text("total: %+.6f", derived.total_energy_j);
+  ImGui::Text("mechanical total: %+.6f", derived.total_energy_j);
+  if (config.drive_enabled || config.damping_enabled) {
+    ImGui::TextDisabled(
+        "Mechanical energy is not conserved with drive or damping.");
+  }
 
   if (runtime_error != nullptr) {
     ImGui::Spacing();
@@ -688,110 +380,51 @@ bool DrawPendulumMonitor(const PendulumConfig& config,
   return stop;
 }
 
+struct PendulumLabTraits {
+  using Config = PendulumConfig;
+  using State = PendulumState;
+  static constexpr float kPhysicsStep = kPendulumPhysicsStep;
+  static constexpr double kMaximumFrameTime = 0.25;
+  static constexpr const char* kInvalidHistoryTimeMessage =
+      "The pendulum produced an invalid history time.";
+  static constexpr const char* kNonIncreasingHistoryTimeMessage =
+      "The pendulum produced a non-increasing history time.";
+
+  Config MakeInitialConfig() { return MakeDrivenPendulumConfig(); }
+  State MakeState(const Config& config) {
+    return MakeInitialPendulumState(config);
+  }
+  const char* InitialStateIssue(const Config&, const State&) { return nullptr; }
+  bool CanStep(const State&) { return true; }
+  bool Step(const Config& config, State* state) {
+    return StepPendulum(config, kPhysicsStep, state);
+  }
+  std::string StepFailureMessage(const Config& config, const State& state,
+                                 std::vector<State>*) {
+    const char* error = GetPendulumStateError(config, state);
+    return error != nullptr
+               ? error
+               : "The fixed-step integrator rejected an unstable state.";
+  }
+  const char* AfterStepIssue(const State&) { return nullptr; }
+  shell::SetupAction DrawSetup(Config* config, const std::string&) {
+    return DrawPendulumSetupScreen(config);
+  }
+  bool DrawFrame(const Config& config, const State& state,
+                 const std::vector<State>& history, bool* paused,
+                 double* inspect_time, bool* follow_live,
+                 const std::string& error) {
+    DrawPendulumScene(config, state);
+    return DrawPendulumMonitor(config, state, history, paused, inspect_time,
+                               follow_live,
+                               error.empty() ? nullptr : error.c_str());
+  }
+};
+
 }  // namespace
 
-namespace tiny2d::sandbox {
-
 SimulationResult RunRotationPendulumSimulation(SDL_Renderer* renderer) {
-  if (renderer == nullptr) {
-    return SimulationResult::kBackToSelection;
-  }
-
-  PendulumConfig config;
-  PendulumState state = MakeInitialPendulumState(config);
-  // ponytail: Match V9 and keep one run in memory; cap only for long sessions.
-  std::vector<PendulumState> history;
-  bool simulation_started = false;
-  bool paused = false;
-  bool follow_live = true;
-  float inspect_time = 0.0f;
-  const char* runtime_error = nullptr;
-  double accumulated_time = 0.0;
-  const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
-  Uint64 previous_time = SDL_GetPerformanceCounter();
-
-  while (true) {
-    bool return_requested = false;
-    SimulationResult return_result = SimulationResult::kBackToSelection;
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      if (event.type == SDL_QUIT) {
-        return_requested = true;
-        return_result = SimulationResult::kQuit;
-      } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
-                 event.key.keysym.sym == SDLK_SPACE && simulation_started &&
-                 runtime_error == nullptr) {
-        paused = !paused;
-      }
-    }
-
-    ImGui_ImplSDLRenderer2_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
-
-    const Uint64 current_time = SDL_GetPerformanceCounter();
-    if (!return_requested && !simulation_started) {
-      previous_time = current_time;
-      accumulated_time = 0.0;
-      const PendulumSetupAction action = DrawPendulumSetupScreen(&config);
-      if (action == PendulumSetupAction::kBack) {
-        return_requested = true;
-      } else if (action == PendulumSetupAction::kStart) {
-        state = MakeInitialPendulumState(config);
-        history.clear();
-        history.push_back(state);
-        simulation_started = true;
-        paused = false;
-        follow_live = true;
-        inspect_time = 0.0f;
-        runtime_error = nullptr;
-        previous_time = current_time;
-      }
-    } else if (simulation_started) {
-      if (!return_requested && !paused && runtime_error == nullptr) {
-        const double frame_time = std::min(
-            static_cast<double>(current_time - previous_time) / frequency,
-            kPendulumMaximumFrameTime);
-        previous_time = current_time;
-        accumulated_time += frame_time;
-        while (accumulated_time >= kPendulumPhysicsStep) {
-          if (!StepPendulum(config, kPendulumPhysicsStep, &state)) {
-            runtime_error = GetPendulumStateError(config, state);
-            if (runtime_error == nullptr) {
-              runtime_error =
-                  "The fixed-step integrator rejected an unstable state.";
-            }
-            paused = true;
-            accumulated_time = 0.0;
-            break;
-          }
-          history.push_back(state);
-          accumulated_time -= kPendulumPhysicsStep;
-        }
-      } else {
-        previous_time = current_time;
-        accumulated_time = 0.0;
-      }
-
-      DrawPendulumScene(config, state);
-      if (!return_requested &&
-          DrawPendulumMonitor(config, state, history, &paused, &inspect_time,
-                              &follow_live, runtime_error)) {
-        return_requested = true;
-      }
-    }
-
-    ImGui::Render();
-    SDL_SetRenderDrawColor(renderer, 18, 20, 24, 255);
-    SDL_RenderClear(renderer);
-    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
-    SDL_RenderPresent(renderer);
-
-    if (return_requested) {
-      return return_result;
-    }
-  }
+  return shell::RunLab(renderer, PendulumLabTraits{});
 }
 
 }  // namespace tiny2d::sandbox

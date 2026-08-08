@@ -1,0 +1,169 @@
+# Tiny2D Engine Developer Guide
+
+> Current experiment generation: V17 (unreleased) / Latest release: 2.0.0
+> (V10)<br>
+> C++17 · SDL2 · Dear ImGui · CMake + vcpkg
+
+This guide documents the system as it exists after the 2026-08 architecture
+reconstruction. It replaces the earlier Chinese-language guide, which
+described the pre-reconstruction (V14-era) layout.
+
+## 1. Purpose
+
+Tiny2D Engine is a compact, verifiable two-dimensional physics laboratory.
+It is not a general-purpose game engine. Its value is transparent physical
+models, measurable results, and a reusable core that grows only when a real
+experiment requires it. The intended workflow: pick an experiment, enter
+SI-unit parameters, predict the behavior, run and inspect the simulation,
+and compare the numbers against physical laws or analytical solutions.
+
+## 2. Architecture
+
+```
+Sandbox/main.cc            application bootstrap and lab selection menu
+Sandbox/app/lab_registry.h the table of installed labs
+Sandbox/*_simulation.cc    one UI file per lab (setup, scene, monitor)
+Sandbox/app/lab_shell.h    shared frame loop and lab lifecycle
+Sandbox/*_model.{h,cc}     one UI-free physics model per lab
+Engine/tiny2d_engine.h     the engine's public API (the only public header)
+Engine/internal/*          engine implementation units
+```
+
+The dependency direction is fixed and acyclic:
+`main -> registry -> lab UI -> shell -> model -> Engine`. The engine must
+not depend on SDL, ImGui, or any specific experiment; the headless CI job
+builds the engine and every model with GCC and Clang under
+`-Wall -Wextra -Wpedantic -Werror` to enforce this.
+
+### Engine internals
+
+`Engine/tiny2d_engine.cc` holds the public entry points, parameter
+validation, semi-implicit Euler integration, and step orchestration. The
+supporting units under `Engine/internal/` are implementation details in
+namespace `tiny2d::internal` with no stability guarantee:
+
+- `body_math.h` — vector algebra, rotations, vertices, axes, inverse mass,
+  moments of inertia (header-only).
+- `validation.{h,cc}` — the failure-atomic input validation contract.
+- `contacts.{h,cc}` — SAT rectangle contacts with face clipping, circle and
+  rectangle-circle contacts, circle-circle time of impact, and the
+  missed-sweep test that gates CCD.
+- `solver.{h,cc}` — material resolution and mixing, the impulse solver
+  (including the coupled two-point normal solve), friction, and the four
+  window-wall contacts. The solver templates accept any body type that
+  exposes mass, pose, and velocity state, so rectangle-circle pairs resolve
+  through the same code path as same-shape pairs.
+
+## 3. Engine semantics
+
+- **Units:** caller-selected but internally consistent; the engine performs
+  no SI or pixel conversion. Labs use SI units and convert at their own
+  boundary.
+- **Axes and angles:** +X points right, +Y points down; angles are radians
+  and a positive angle or angular velocity appears clockwise on screen.
+- **Bodies:** `Rectangle` and `Circle` are plain aggregates. Zero mass makes
+  a body static; a dynamic body needs mass >= 1e-6. `fixed_rotation` locks
+  the angle. `Circle` chooses `kSolidDisk` (I = mr^2/2) or `kHoop`
+  (I = mr^2) inertia.
+- **Loads:** `AddForceAtPoint` and `AddTorque` accumulate force and torque
+  for the next successful `Update`, which consumes and clears them — even
+  when `delta_time` is zero.
+- **Materials:** `CollisionMaterial` either inherits all world values with
+  the `{-1, -1, -1}` sentinel or specifies all three fields. Contact
+  restitution takes the larger body value; both friction values mix by
+  geometric mean.
+- **Validation:** every public operation validates completely before
+  mutating anything and throws `std::invalid_argument` on invalid input, so
+  failure paths leave inputs unchanged.
+- **Stepping:** there is exactly one integration and solver path. The
+  rectangle-only `Update` overload delegates to the mixed rectangle/circle
+  overload with no circles, CCD disabled, and the legacy restitution
+  velocity threshold of 20. `TestLegacyUpdateMatchesMixedUpdateTrajectories`
+  keeps the two bit-identical and must not be weakened.
+- **Continuous collision detection:** when `enable_circle_circle_ccd` is
+  true, the step first integrates speculatively; if a circle pair that is
+  separated at both endpoints would cross inside the step, the world is
+  advanced impact-to-impact at the earliest times of impact (stable root
+  form `c / (-b + sqrt(disc))`), each contact resolved with restitution
+  allowed, before the discrete solver iterations run. Otherwise the
+  discrete result is preserved exactly.
+- **Damping:** exponential per-body damping applies after force
+  integration: `v = (v0 + F/m * dt) * exp(-rate * dt)`.
+  `TestPerBodyExponentialDamping` locks this ordering; ForceLab's energy
+  accounting depends on it.
+
+## 4. The lab pattern
+
+Each lab consists of a **model** and a **UI file**.
+
+The model (`*_model.h/.cc`) is deterministic, UI-free, and independently
+testable. It follows one shape everywhere:
+
+- `Config` — validated SI parameters with documented ranges; a
+  `Get*ConfigError` function returns `nullptr` or a stable message.
+- `MakeInitial*State` — builds the starting `State` (throws on invalid
+  config).
+- `Step*(config, dt, state*)` — advances one fixed step; returns false and
+  leaves the state unchanged on invalid input or an unstable result.
+- `Derived` — quantities computed from a state for telemetry and testing:
+  energies, torques, analytical references, error terms.
+- `Find*State(history, t)` — nearest-sample history lookup.
+
+The UI file provides the lab's setup screen, scene drawing, and monitor
+panel. Standard continuous labs declare a traits struct and call
+`shell::RunLab`; the shell owns the SDL event pump, the ImGui frame,
+rendering, the fixed-step clock, history recording, and the start / pause /
+error / inspect protocol. The traits contract is documented at the top of
+`Sandbox/app/lab_shell.h`. Labs with nonstandard lifecycles (the V9 incline
+lab renders with raw SDL under the ImGui layer; V17 ImpactLab runs a
+single-step evidence loop with replay) build directly on
+`shell::RunFrameLoop`.
+
+Shared utilities: `fixed_step_clock.h` (frame-time accumulation into fixed
+physics steps), `simulation_history.h` (bounded, decimating history append),
+and `sim_ui.h` (slider-plus-input widgets and arrow drawing).
+
+## 5. The experiments
+
+| Lab | Physics | Analytical anchors |
+| --- | --- | --- |
+| V9 Incline Laboratory | Two blocks on a ramp and floor with friction, a spring, and a uniform electric field | Energy accounting, SI calibration |
+| V11 RollLab | Disk or hoop sliding into pure rolling under friction plus E and B fields | Slip time, rolling condition, energy loss |
+| V13 Gravito-Orbit | Charged particle in uniform E, B, and gravity | Exact cyclotron/drift trajectory (V12 preset preserved) |
+| V14 Driven PivotLab | Physical pendulum with damping and periodic torque | Small-angle period, resonance ratio, drive power (V10 behavior preserved) |
+| V15 ForceLab | Rectangle driven through a centered or eccentric spring attachment | Centered-case period, energy budget with damping loss |
+| V16 ContactLab | Circle impacts and rolling with per-body materials | Momentum/energy checks, rolling slip tolerance |
+| V17 ImpactLab | Discrete vs CCD lanes over one fixed step | Swept-circle entry/exit times, expected post-impact state, per-lane error terms |
+
+## 6. Adding a lab
+
+1. Write the model pair (`Sandbox/<name>_model.h/.cc`) with documented SI
+   units, axes, signs, and ranges.
+2. Write the UI file (`Sandbox/<name>_simulation.cc`): a traits struct on
+   `shell::RunLab` for a standard lab, or a custom frame on
+   `shell::RunFrameLoop`.
+3. Declare the run function in `Sandbox/simulations.h` and add one entry to
+   `Sandbox/app/lab_registry.h`.
+4. Add the model source, the simulation source, and a test suite to
+   `CMakeLists.txt`. Tests link production targets and use the shared
+   `CHECK` harness from `tests/test_support.h`.
+5. Every model needs at least one analytical anchor, a conservation or
+   dissipation law, explicit tolerances, a deterministic test, and a
+   long-run finite-state check.
+
+## 7. Verification
+
+`tools/verify.ps1 -Profile Fast` runs clang-format (`--Werror`, tracked and
+untracked sources), the Debug build, all test suites, and whitespace checks.
+`-Profile Full` adds Release, ASan, clang-tidy, and the engine-only
+warnings-as-errors build. CI additionally builds headless on Ubuntu with GCC
+and Clang. GCC and Clang reject unused file-local functions under `-Werror`;
+MSVC does not warn about them, so run formatting and keep dead code out
+before pushing.
+
+## 8. Versioning
+
+`version-semver` in `vcpkg.json` is the single source of the product
+version; CMake and the window title derive from it. V-numbers (V9…V17) name
+experiment generations and never become semantic versions. Releases tag
+`v<version-semver>` and update `CHANGELOG.md`.

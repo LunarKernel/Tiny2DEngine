@@ -1,26 +1,18 @@
-#define SDL_MAIN_HANDLED
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <random>
+#include <stdexcept>
 #include <string>
 
-#include "incline_spring_simulation.cc"
+#include "fixed_step_clock.h"
+#include "incline_spring_model.h"
+#include "simulation_history.h"
+#include "test_support.h"
 
+namespace tiny2d::sandbox::incline_spring {
 namespace {
-
-std::size_t check_count = 0;
-
-void Check(bool condition, const char* expression, const char* file, int line) {
-  ++check_count;
-  if (!condition) {
-    std::cerr << file << ':' << line << ": CHECK failed: " << expression
-              << '\n';
-    std::exit(1);
-  }
-}
-
-#define CHECK(expression) Check((expression), #expression, __FILE__, __LINE__)
 
 constexpr float kTestTolerance = 0.001f;
 
@@ -28,12 +20,60 @@ bool Near(float actual, float expected, float tolerance = kTestTolerance) {
   return std::abs(actual - expected) <= tolerance;
 }
 
+bool NearTime(double actual, double expected, double tolerance = 0.000001) {
+  return std::abs(actual - expected) <= tolerance;
+}
+
+struct HistorySample {
+  double time;
+  int id;
+};
+
+void TestFixedStepClock() {
+  tiny2d::sandbox::FixedStepClock exact_clock(8.0, 0);
+  exact_clock.Accumulate(1, 1.0);
+  CHECK(exact_clock.HasStep(0.125));
+  exact_clock.ConsumeStep(0.0625);
+  CHECK(exact_clock.HasStep(0.0625));
+  CHECK(!exact_clock.HasStep(0.125));
+  exact_clock.ConsumeStep(0.0625);
+  CHECK(!exact_clock.HasStep(0.0625));
+
+  tiny2d::sandbox::FixedStepClock clamped_clock(8.0, 0);
+  clamped_clock.Accumulate(100, 0.25);
+  clamped_clock.ConsumeStep(0.125);
+  clamped_clock.ConsumeStep(0.125);
+  CHECK(!clamped_clock.HasStep(0.125));
+
+  clamped_clock.Accumulate(101, 1.0);
+  CHECK(clamped_clock.HasStep(0.125));
+  clamped_clock.Reset(200);
+  CHECK(!clamped_clock.HasStep(0.125));
+  clamped_clock.Accumulate(201, 1.0);
+  CHECK(clamped_clock.HasStep(0.125));
+  clamped_clock.DiscardPendingSteps();
+  CHECK(!clamped_clock.HasStep(0.125));
+
+  tiny2d::sandbox::FixedStepClock backward_clock(10.0, 100);
+  backward_clock.Accumulate(90, 1.0);
+  CHECK(!backward_clock.HasStep(0.1));
+  backward_clock.Accumulate(91, 1.0);
+  CHECK(backward_clock.HasStep(0.1));
+}
+
 void ExpectInvalidConfig(const SimulationConfig& config) {
   CHECK(GetConfigError(config) != nullptr);
 }
 
 void CheckBodyFinite(const tiny2d::Rectangle& body) {
-  CHECK(IsFiniteRectangle(body));
+  const std::array values = {
+      body.mass,       body.position.x, body.position.y,       body.velocity.x,
+      body.velocity.y, body.angle,      body.angular_velocity, body.width,
+      body.height,     body.charge,
+  };
+  for (float value : values) {
+    CHECK(std::isfinite(value));
+  }
   for (const tiny2d::Vec2 vertex : tiny2d::GetVertices(body)) {
     CHECK(std::isfinite(vertex.x));
     CHECK(std::isfinite(vertex.y));
@@ -41,41 +81,9 @@ void CheckBodyFinite(const tiny2d::Rectangle& body) {
 }
 
 std::vector<tiny2d::Rectangle> CreateScene(const SimulationConfig& config) {
-  std::vector<tiny2d::Rectangle> bodies = {CreateBody(config.body_a, config),
-                                           CreateBody(config.body_b, config)};
-  if (config.ramp_enabled) {
-    bodies.push_back(CreateRamp(config));
-  }
-  return bodies;
-}
-
-bool StepScenario(std::vector<tiny2d::Rectangle>* bodies,
-                  const SimulationConfig& config) {
-  if (config.ramp_enabled) {
-    TransitionBodiesToFloor(*bodies, config, kPhysicsStep);
-  }
-  if (config.spring_enabled) {
-    ApplySpringForce(*bodies, config, kPhysicsStep);
-  }
-  if (config.ramp_enabled) {
-    TransitionBodiesToRamp(*bodies, config, kPhysicsStep);
-  }
-  if (GetAirborneError(*bodies, config) != nullptr) {
-    return false;
-  }
-  tiny2d::Update(*bodies, kPhysicsStep, static_cast<float>(kAreaWidth),
-                 static_cast<float>(kAreaHeight), config.restitution,
-                 config.friction, GetElectricField(config),
-                 GetPixelGravity(config));
-  if (config.ramp_enabled) {
-    TransitionBodiesToFloor(*bodies, config, 0.0f);
-    TransitionBodiesToRamp(*bodies, config, 0.0f);
-  }
-  if (GetAirborneError(*bodies, config) != nullptr) {
-    return false;
-  }
-  ConstrainBodiesToSurfaces(*bodies, config);
-  return true;
+  State state;
+  CHECK(Reset(config, state) == nullptr);
+  return state.bodies;
 }
 
 void TestDefaultAndFeatureConfigurations() {
@@ -83,8 +91,8 @@ void TestDefaultAndFeatureConfigurations() {
   CHECK(GetConfigError(config) == nullptr);
   CHECK(Near(config.body_a.mass_kg, 1.0f));
   CHECK(Near(config.body_b.mass_kg, 3.0f));
-  CHECK(Near(CreateBody(config.body_a, config).mass, 1.0f));
-  CHECK(Near(CreateBody(config.body_b, config).mass, 3.0f));
+  CHECK(Near(CreateScene(config)[0].mass, 1.0f));
+  CHECK(Near(CreateScene(config)[1].mass, 3.0f));
   const float default_mass_scale = GetEngineMassPerKilogram(config);
   config.body_b.mass_kg = 5.0f;
   CHECK(Near(GetEngineMassPerKilogram(config), default_mass_scale));
@@ -105,6 +113,50 @@ void TestDefaultAndFeatureConfigurations() {
   CHECK(GetConfigError(config) == nullptr);
   config.restitution = 1.0f;
   CHECK(GetConfigError(config) == nullptr);
+}
+
+void TestStateLifecycleContracts() {
+  SimulationConfig config;
+  State state;
+  CHECK(Reset(config, state) == nullptr);
+  CHECK(state.bodies.size() == 3);
+  CHECK(state.history.size() == 1);
+  CHECK(state.time == 0.0);
+
+  const float initial_position_x = state.bodies[0].position.x;
+  SimulationConfig invalid_config = config;
+  invalid_config.reference_speed_mps = 0.0f;
+  CHECK(Reset(invalid_config, state) != nullptr);
+  CHECK(state.bodies.size() == 3);
+  CHECK(state.history.size() == 1);
+  CHECK(state.bodies[0].position.x == initial_position_x);
+
+  CHECK(Step(state, 0.0f) != nullptr);
+  CHECK(state.history.size() == 1);
+  CHECK(Step(state, kPhysicsStep) == nullptr);
+  CHECK(NearTime(state.time, kPhysicsStep));
+  CHECK(state.history.size() == 2);
+  CHECK(FindSnapshot(state, state.time) == &state.history.back());
+}
+
+void TestEngineValidationExceptionsPropagate() {
+  SimulationConfig config;
+  config.ramp_enabled = false;
+  config.spring_enabled = false;
+  State state;
+  CHECK(Reset(config, state) == nullptr);
+
+  state.config.electric_field_enabled = true;
+  state.config.electric_field_strength_n_per_c =
+      std::numeric_limits<float>::max();
+  state.config.body_a_engine_mass = std::numeric_limits<float>::max();
+  bool caught = false;
+  try {
+    static_cast<void>(Step(state, kPhysicsStep));
+  } catch (const std::invalid_argument&) {
+    caught = true;
+  }
+  CHECK(caught);
 }
 
 void TestEveryFloatFieldRejectsNonFiniteValues() {
@@ -245,8 +297,8 @@ void TestPositionAndOverlapValidation() {
   config = SimulationConfig{};
   config.real_floor_length_m = 0.1f;
   config.real_ramp_length_m = 10000.0f;
-  ClampBodySurfaceX(&config.body_a, config);
-  ClampBodySurfaceX(&config.body_b, config);
+  ClampBodySurfaceX(config.body_a, config);
+  ClampBodySurfaceX(config.body_b, config);
   ExpectInvalidConfig(config);
 }
 
@@ -264,8 +316,8 @@ void TestDangerousFiniteCalibrationsAreRejected() {
   config.body_b.charge = -1000.0f;
   config.electric_field_enabled = true;
   config.electric_field_strength_n_per_c = 1000000.0f;
-  ClampBodySurfaceX(&config.body_a, config);
-  ClampBodySurfaceX(&config.body_b, config);
+  ClampBodySurfaceX(config.body_a, config);
+  ClampBodySurfaceX(config.body_b, config);
   ExpectInvalidConfig(config);
 
   config = SimulationConfig{};
@@ -340,7 +392,7 @@ void TestSiCalibrationAndElectricFieldDirections() {
 
   config.body_a.charged = true;
   config.body_a.charge = 2.0f;
-  const tiny2d::Rectangle body = CreateBody(config.body_a, config);
+  const tiny2d::Rectangle body = CreateScene(config)[0];
   const tiny2d::Vec2 acceleration =
       tiny2d::GetLinearAcceleration(body, GetElectricField(config), 0.0f);
   const float real_acceleration =
@@ -359,19 +411,19 @@ void TestBodyMassCalibrationUsesBodyAReference() {
   CHECK(Near(GetEngineMassPerKilogram(config), 2.0f));
   CHECK(Near(GetBodyEngineMass(config.body_a, config), 4.0f));
   CHECK(Near(GetBodyEngineMass(config.body_b, config), 6.0f));
-  CHECK(Near(CreateBody(config.body_a, config).mass, 4.0f));
-  CHECK(Near(CreateBody(config.body_b, config).mass, 6.0f));
+  CHECK(Near(CreateScene(config)[0].mass, 4.0f));
+  CHECK(Near(CreateScene(config)[1].mass, 6.0f));
 
   config.body_b.mass_kg = 7.5f;
   CHECK(Near(GetEngineMassPerKilogram(config), 2.0f));
-  CHECK(Near(CreateBody(config.body_b, config).mass, 15.0f));
+  CHECK(Near(CreateScene(config)[1].mass, 15.0f));
 
   config.body_a.mass_kg = 4.0f;
   CHECK(Near(GetEngineMassPerKilogram(config), 1.0f));
-  CHECK(Near(CreateBody(config.body_b, config).mass, 7.5f));
+  CHECK(Near(CreateScene(config)[1].mass, 7.5f));
   config.body_a_engine_mass = 8.0f;
   CHECK(Near(GetEngineMassPerKilogram(config), 2.0f));
-  CHECK(Near(CreateBody(config.body_b, config).mass, 15.0f));
+  CHECK(Near(CreateScene(config)[1].mass, 15.0f));
 
   config.body_a.mass_kg = 2.0f;
   config.body_a_engine_mass = 4.0f;
@@ -380,7 +432,7 @@ void TestBodyMassCalibrationUsesBodyAReference() {
   config.body_b.charge = 2.0f;
   config.electric_field_enabled = true;
   config.electric_field_strength_n_per_c = 12.0f;
-  const tiny2d::Rectangle body_b = CreateBody(config.body_b, config);
+  const tiny2d::Rectangle body_b = CreateScene(config)[1];
   const tiny2d::Vec2 acceleration =
       tiny2d::GetLinearAcceleration(body_b, GetElectricField(config), 0.0f);
   const float real_acceleration =
@@ -390,7 +442,7 @@ void TestBodyMassCalibrationUsesBodyAReference() {
 
 void TestBodyCreationAndClamping() {
   SimulationConfig config;
-  const tiny2d::Rectangle ramp_body = CreateBody(config.body_a, config);
+  const tiny2d::Rectangle ramp_body = CreateScene(config)[0];
   CHECK(Near(ramp_body.mass, config.body_a_engine_mass));
   CHECK(Near(ramp_body.angle, GetRampAngle(config)));
   CHECK(Near(std::hypot(ramp_body.velocity.x, ramp_body.velocity.y), 200.0f));
@@ -399,7 +451,7 @@ void TestBodyCreationAndClamping() {
 
   config.body_b.charged = true;
   config.body_b.charge = -3.0f;
-  const tiny2d::Rectangle floor_body = CreateBody(config.body_b, config);
+  const tiny2d::Rectangle floor_body = CreateScene(config)[1];
   CHECK(Near(floor_body.mass, 3.0f));
   CHECK(Near(floor_body.angle, 0.0f));
   CHECK(Near(floor_body.position.y,
@@ -407,48 +459,123 @@ void TestBodyCreationAndClamping() {
   CHECK(Near(floor_body.charge, -3.0f));
 
   config.body_a.surface_x = -1000.0f;
-  ClampBodySurfaceX(&config.body_a, config);
+  ClampBodySurfaceX(config.body_a, config);
   CHECK(Near(config.body_a.surface_x,
              GetMinimumBodySurfaceX(config.body_a, config)));
   config.body_a.surface_x = 100000.0f;
-  ClampBodySurfaceX(&config.body_a, config);
+  ClampBodySurfaceX(config.body_a, config);
   CHECK(Near(config.body_a.surface_x,
              GetMaximumBodySurfaceX(config.body_a, config)));
 }
 
 void TestSnapshotLookupAndAcceleration() {
-  std::vector<SimulationSnapshot> history;
-  CHECK(FindSnapshot(history, 0.0f) == nullptr);
-  history.resize(3);
-  history[0].time = 0.0f;
-  history[1].time = 1.0f;
-  history[2].time = 2.0f;
-  CHECK(FindSnapshot(history, -1.0f) == &history[0]);
-  CHECK(FindSnapshot(history, 0.0f) == &history[0]);
-  CHECK(FindSnapshot(history, 0.5f) == &history[0]);
-  CHECK(FindSnapshot(history, 0.51f) == &history[1]);
-  CHECK(FindSnapshot(history, 3.0f) == &history[2]);
-  CHECK(FindSnapshot(history, std::numeric_limits<float>::quiet_NaN()) ==
+  State lookup_state;
+  CHECK(FindSnapshot(lookup_state, 0.0f) == nullptr);
+  lookup_state.history.resize(3);
+  lookup_state.history[0].time = 0.0;
+  lookup_state.history[1].time = 1.0;
+  lookup_state.history[2].time = 2.0;
+  CHECK(FindSnapshot(lookup_state, -1.0) == &lookup_state.history[0]);
+  CHECK(FindSnapshot(lookup_state, 0.0) == &lookup_state.history[0]);
+  CHECK(FindSnapshot(lookup_state, 0.5) == &lookup_state.history[0]);
+  CHECK(FindSnapshot(lookup_state, 0.51) == &lookup_state.history[1]);
+  CHECK(FindSnapshot(lookup_state, 3.0) == &lookup_state.history[2]);
+  CHECK(FindSnapshot(lookup_state, std::numeric_limits<double>::quiet_NaN()) ==
         nullptr);
 
   SimulationConfig config;
   config.electric_field_enabled = true;
   config.body_a.charged = true;
-  std::vector<tiny2d::Rectangle> bodies = CreateScene(config);
-  std::array<tiny2d::Vec2, 2> previous_velocities = {bodies[0].velocity,
-                                                     bodies[1].velocity};
-  SimulationSnapshot snapshot =
-      MakeSnapshot(bodies, previous_velocities, 0.0f, 0.0f, config);
+  State state;
+  CHECK(Reset(config, state) == nullptr);
+  const SimulationSnapshot& initial_snapshot = state.history.front();
   const tiny2d::Vec2 expected = tiny2d::GetLinearAcceleration(
-      bodies[0], GetElectricField(config), GetPixelGravity(config));
-  CHECK(Near(snapshot.bodies[0].acceleration.x, expected.x));
-  CHECK(Near(snapshot.bodies[0].acceleration.y, expected.y));
+      state.bodies[0], GetElectricField(config), GetPixelGravity(config));
+  CHECK(Near(initial_snapshot.bodies[0].acceleration.x, expected.x));
+  CHECK(Near(initial_snapshot.bodies[0].acceleration.y, expected.y));
 
-  bodies[0].velocity.x += 10.0f;
-  bodies[0].velocity.y -= 20.0f;
-  snapshot = MakeSnapshot(bodies, previous_velocities, 1.0f, 0.5f, config);
-  CHECK(Near(snapshot.bodies[0].acceleration.x, 20.0f));
-  CHECK(Near(snapshot.bodies[0].acceleration.y, -40.0f));
+  const tiny2d::Vec2 previous_velocity = state.bodies[0].velocity;
+  CHECK(Step(state, kPhysicsStep) == nullptr);
+  const SimulationSnapshot& stepped_snapshot = state.history.back();
+  CHECK(
+      Near(stepped_snapshot.bodies[0].acceleration.x,
+           (state.bodies[0].velocity.x - previous_velocity.x) / kPhysicsStep));
+  CHECK(
+      Near(stepped_snapshot.bodies[0].acceleration.y,
+           (state.bodies[0].velocity.y - previous_velocity.y) / kPhysicsStep));
+  CHECK(NearTime(stepped_snapshot.time, state.time));
+}
+
+void TestBoundedSimulationHistory() {
+  std::vector<HistorySample> history{{0.0, 0}};
+  const std::vector<HistorySample> original = history;
+  CHECK(!tiny2d::sandbox::AppendHistorySample(
+      static_cast<std::vector<HistorySample>*>(nullptr), {1.0, 1},
+      &HistorySample::time));
+  CHECK(!tiny2d::sandbox::AppendHistorySample(
+      &history, {1.0, 1}, static_cast<double HistorySample::*>(nullptr)));
+  for (double invalid_time : {std::numeric_limits<double>::quiet_NaN(),
+                              std::numeric_limits<double>::infinity(),
+                              -std::numeric_limits<double>::infinity()}) {
+    CHECK(!tiny2d::sandbox::AppendHistorySample(&history, {invalid_time, 1},
+                                                &HistorySample::time));
+  }
+  CHECK(!tiny2d::sandbox::AppendHistorySample(&history, {0.0, 1},
+                                              &HistorySample::time));
+  CHECK(!tiny2d::sandbox::AppendHistorySample(&history, {-1.0, 1},
+                                              &HistorySample::time));
+  CHECK(history.size() == original.size());
+  CHECK(history.front().time == original.front().time);
+  CHECK(history.front().id == original.front().id);
+
+  history.clear();
+  history.reserve(tiny2d::sandbox::kMaxSimulationHistorySamples);
+  for (std::size_t index = 0;
+       index < tiny2d::sandbox::kMaxSimulationHistorySamples; ++index) {
+    history.push_back({static_cast<double>(index), static_cast<int>(index)});
+  }
+  CHECK(tiny2d::sandbox::AppendHistorySample(
+      &history,
+      {static_cast<double>(tiny2d::sandbox::kMaxSimulationHistorySamples),
+       static_cast<int>(tiny2d::sandbox::kMaxSimulationHistorySamples)},
+      &HistorySample::time));
+  CHECK(history.size() ==
+        tiny2d::sandbox::kMaxSimulationHistorySamples / 2 + 2);
+  for (std::size_t index = 0;
+       index < tiny2d::sandbox::kMaxSimulationHistorySamples / 2; ++index) {
+    CHECK(history[index].id == static_cast<int>(index * 2));
+  }
+  CHECK(history[tiny2d::sandbox::kMaxSimulationHistorySamples / 2].id ==
+        static_cast<int>(tiny2d::sandbox::kMaxSimulationHistorySamples - 1));
+  CHECK(history.back().id ==
+        static_cast<int>(tiny2d::sandbox::kMaxSimulationHistorySamples));
+
+  int next_id = history.back().id + 1;
+  constexpr int kAdditionalCompactions = 3;
+  const std::size_t append_count =
+      kAdditionalCompactions * tiny2d::sandbox::kMaxSimulationHistorySamples;
+  for (std::size_t index = 0; index < append_count; ++index) {
+    CHECK(tiny2d::sandbox::AppendHistorySample(
+        &history, {static_cast<double>(next_id), next_id},
+        &HistorySample::time));
+    ++next_id;
+    CHECK(history.size() <= tiny2d::sandbox::kMaxSimulationHistorySamples);
+  }
+  CHECK(history.front().id == 0);
+  CHECK(history.back().id == next_id - 1);
+  for (std::size_t index = 1; index < history.size(); ++index) {
+    CHECK(history[index - 1].time < history[index].time);
+  }
+}
+
+void TestLargeSimulationTimeStillAdvances() {
+  State state;
+  CHECK(Reset(SimulationConfig{}, state) == nullptr);
+  state.time = 1000000.0;
+  const double previous_time = state.time;
+  CHECK(Step(state, kPhysicsStep) == nullptr);
+  CHECK(state.time > previous_time);
+  CHECK(state.history.back().time == state.time);
 }
 
 void TestSignedTelemetry() {
@@ -464,12 +591,12 @@ void TestSignedTelemetry() {
   telemetry.velocity = {};
   CHECK(GetSignedSpeed(telemetry, config) == 0.0f);
 
-  const tiny2d::Rectangle ramp_body = CreateBody(config.body_a, config);
+  const tiny2d::Rectangle ramp_body = CreateScene(config)[0];
   telemetry.position = ramp_body.position;
   telemetry.angle = ramp_body.angle;
   CHECK(GetSignedDistance(telemetry, ramp_body.width, config) >= 0.0f);
 
-  const tiny2d::Rectangle floor_body = CreateBody(config.body_b, config);
+  const tiny2d::Rectangle floor_body = CreateScene(config)[1];
   telemetry.position = floor_body.position;
   telemetry.angle = floor_body.angle;
   CHECK(Near(GetSignedDistance(telemetry, floor_body.width, config), 0.0f));
@@ -481,59 +608,62 @@ void TestSignedTelemetry() {
 
 void TestJunctionTransitionsPreserveSpeed() {
   SimulationConfig config;
+  config.spring_enabled = false;
+  config.body_b.surface_x = GetMinimumBodySurfaceX(config.body_b, config);
+  config.body_a.surface_x = GetMinimumBodySurfaceX(config.body_a, config);
   const float ramp_angle = GetRampAngle(config);
   const float cosine = std::cos(ramp_angle);
   const float sine = std::sin(ramp_angle);
 
-  config.body_a.surface_x = GetMinimumBodySurfaceX(config.body_a, config);
-  std::vector<tiny2d::Rectangle> bodies = {CreateBody(config.body_a, config)};
+  State state;
+  CHECK(Reset(config, state) == nullptr);
   const float initial_speed =
-      std::hypot(bodies[0].velocity.x, bodies[0].velocity.y);
-  TransitionBodiesToFloor(bodies, config, kPhysicsStep);
-  CHECK(Near(bodies[0].angle, 0.0f));
-  CHECK(Near(std::hypot(bodies[0].velocity.x, bodies[0].velocity.y),
-             initial_speed));
-  CHECK(bodies[0].velocity.x < 0.0f);
-  TransitionBodiesToFloor(bodies, config, kPhysicsStep);
-  CHECK(Near(bodies[0].angle, 0.0f));
+      std::hypot(state.bodies[0].velocity.x, state.bodies[0].velocity.y);
+  CHECK(Step(state, kPhysicsStep) == nullptr);
+  CHECK(Near(state.bodies[0].angle, 0.0f));
+  CHECK(Near(std::hypot(state.bodies[0].velocity.x, state.bodies[0].velocity.y),
+             initial_speed, 0.01f));
+  CHECK(state.bodies[0].velocity.x < 0.0f);
+  CHECK(Step(state, kPhysicsStep) == nullptr);
+  CHECK(Near(state.bodies[0].angle, 0.0f));
 
+  config = SimulationConfig{};
+  config.spring_enabled = false;
   config.body_b.surface_x = GetMaximumBodySurfaceX(config.body_b, config);
   config.body_b.downhill_speed = -200.0f;
-  bodies = {CreateBody(config.body_b, config)};
-  TransitionBodiesToRamp(bodies, config, kPhysicsStep);
-  CHECK(Near(bodies[0].angle, ramp_angle));
-  CHECK(Near(bodies[0].velocity.x, cosine * 200.0f));
-  CHECK(Near(bodies[0].velocity.y, sine * 200.0f));
-  CHECK(bodies[0].angular_velocity == 0.0f);
-
-  bodies[0].velocity = {-cosine * 10.0f, -sine * 10.0f};
-  TransitionBodiesToRamp(bodies, config, kPhysicsStep);
-  CHECK(Near(bodies[0].angle, ramp_angle));
+  CHECK(Reset(config, state) == nullptr);
+  CHECK(Step(state, kPhysicsStep) == nullptr);
+  const tiny2d::Rectangle& body = state.bodies[1];
+  CHECK(Near(body.angle, ramp_angle));
+  CHECK(body.velocity.x > 0.0f);
+  CHECK(body.velocity.y < 0.0f);
+  CHECK(Near(body.velocity.x * sine - body.velocity.y * cosine, 0.0f, 0.01f));
+  CHECK(body.angular_velocity == 0.0f);
 }
 
 void TestSurfaceConstraintIsStableAndIdempotent() {
   SimulationConfig config;
-  std::vector<tiny2d::Rectangle> bodies = {CreateBody(config.body_a, config)};
+  config.spring_enabled = false;
+  State state;
+  CHECK(Reset(config, state) == nullptr);
   const float ramp_angle = GetRampAngle(config);
   const tiny2d::Vec2 normal{std::sin(ramp_angle), -std::cos(ramp_angle)};
-  bodies[0].position.x += normal.x * 20.0f;
-  bodies[0].position.y += normal.y * 20.0f;
-  bodies[0].velocity.x += normal.x * 50.0f;
-  bodies[0].velocity.y += normal.y * 50.0f;
-  ConstrainBodiesToSurfaces(bodies, config);
-  const float normal_distance =
-      (bodies[0].position.x - GetRampBottomX(config)) * normal.x +
-      (bodies[0].position.y - static_cast<float>(kAreaHeight)) * normal.y;
-  const float normal_speed =
-      bodies[0].velocity.x * normal.x + bodies[0].velocity.y * normal.y;
-  CHECK(Near(normal_distance, bodies[0].height * 0.5f));
-  CHECK(Near(normal_speed, 0.0f));
-  const tiny2d::Rectangle constrained = bodies[0];
-  ConstrainBodiesToSurfaces(bodies, config);
-  CHECK(Near(bodies[0].position.x, constrained.position.x));
-  CHECK(Near(bodies[0].position.y, constrained.position.y));
-  CHECK(Near(bodies[0].velocity.x, constrained.velocity.x));
-  CHECK(Near(bodies[0].velocity.y, constrained.velocity.y));
+  state.bodies[0].position.x += normal.x * 20.0f;
+  state.bodies[0].position.y += normal.y * 20.0f;
+  state.bodies[0].velocity.x += normal.x * 50.0f;
+  state.bodies[0].velocity.y += normal.y * 50.0f;
+
+  for (int step = 0; step < 2; ++step) {
+    CHECK(Step(state, kPhysicsStep) == nullptr);
+    const tiny2d::Rectangle& body = state.bodies[0];
+    const float normal_distance =
+        (body.position.x - GetRampBottomX(config)) * normal.x +
+        (body.position.y - static_cast<float>(kAreaHeight)) * normal.y;
+    const float normal_speed =
+        body.velocity.x * normal.x + body.velocity.y * normal.y;
+    CHECK(Near(normal_distance, body.height * 0.5f));
+    CHECK(Near(normal_speed, 0.0f));
+  }
 }
 
 void TestSpringForceBoundariesAndMassScaling() {
@@ -541,92 +671,107 @@ void TestSpringForceBoundariesAndMassScaling() {
   config.body_a.mass_kg = 2.0f;
   config.body_a_engine_mass = 1.0f;
   config.body_b.mass_kg = 4.0f;
-  std::vector<tiny2d::Rectangle> bodies = {CreateBody(config.body_b, config)};
-  CHECK(Near(bodies[0].mass, 2.0f));
-  bodies[0].position.x =
-      GetSpringRestX(config) - 10.0f + bodies[0].width * 0.5f;
-  bodies[0].velocity = {};
-  ApplySpringForce(bodies, config, kPhysicsStep);
-  CHECK(Near(bodies[0].velocity.x,
-             config.spring_stiffness * 10.0f / bodies[0].mass * kPhysicsStep));
-  const float light_body_speed = bodies[0].velocity.x;
+  State state;
+  CHECK(Reset(config, state) == nullptr);
+  tiny2d::Rectangle& light_body = state.bodies[1];
+  CHECK(Near(light_body.mass, 2.0f));
+  light_body.position.x =
+      GetSpringRestX(config) - 10.0f + light_body.width * 0.5f;
+  light_body.velocity = {};
+  CHECK(Step(state, kPhysicsStep) == nullptr);
+  CHECK(Near(light_body.velocity.x,
+             config.spring_stiffness * 10.0f / light_body.mass * kPhysicsStep));
+  const float light_body_speed = light_body.velocity.x;
 
   config.body_b.mass_kg = 8.0f;
-  bodies = {CreateBody(config.body_b, config)};
-  bodies[0].position.x =
-      GetSpringRestX(config) - 10.0f + bodies[0].width * 0.5f;
-  bodies[0].velocity = {};
-  ApplySpringForce(bodies, config, kPhysicsStep);
-  CHECK(Near(bodies[0].mass, 4.0f));
-  CHECK(Near(bodies[0].velocity.x, light_body_speed * 0.5f));
+  CHECK(Reset(config, state) == nullptr);
+  tiny2d::Rectangle& heavy_body = state.bodies[1];
+  heavy_body.position.x =
+      GetSpringRestX(config) - 10.0f + heavy_body.width * 0.5f;
+  heavy_body.velocity = {};
+  CHECK(Step(state, kPhysicsStep) == nullptr);
+  CHECK(Near(heavy_body.mass, 4.0f));
+  CHECK(Near(heavy_body.velocity.x, light_body_speed * 0.5f));
 
-  bodies[0].position.x = GetSpringRestX(config) + bodies[0].width * 0.5f;
-  bodies[0].velocity = {};
-  ApplySpringForce(bodies, config, kPhysicsStep);
-  CHECK(Near(bodies[0].velocity.x, 0.0f));
+  CHECK(Reset(config, state) == nullptr);
+  tiny2d::Rectangle& resting_body = state.bodies[1];
+  resting_body.position.x = GetSpringRestX(config) + resting_body.width * 0.5f;
+  resting_body.velocity = {};
+  CHECK(Step(state, kPhysicsStep) == nullptr);
+  CHECK(Near(resting_body.velocity.x, 0.0f));
 
-  tiny2d::Rectangle farther_left = bodies[0];
-  farther_left.position.x = GetSpringRestX(config) - 20.0f;
-  bodies.push_back(farther_left);
-  CHECK(FindSpringBodyIndex(bodies, config) == 1);
+  state.bodies[0].angle = 0.0f;
+  state.bodies[0].position.x = GetSpringRestX(config) - 20.0f;
+  state.bodies[0].position.y =
+      static_cast<float>(kAreaHeight) - state.bodies[0].height * 0.5f;
+  CHECK(Near(GetSpringEndX(state),
+             state.bodies[0].position.x - state.bodies[0].width * 0.5f));
 }
 
 void TestAirborneDetection() {
   SimulationConfig config;
-  std::vector<tiny2d::Rectangle> bodies = CreateScene(config);
-  CHECK(GetAirborneError(bodies, config) == nullptr);
+  State state;
+  CHECK(Reset(config, state) == nullptr);
+  CHECK(Step(state, kPhysicsStep) == nullptr);
 
   config.electric_field_enabled = true;
   config.body_a.charged = true;
   config.electric_field_angle_degrees = 90.0f;
   config.electric_field_strength_n_per_c = 5.0f;
-  bodies = CreateScene(config);
-  CHECK(GetAirborneError(bodies, config) == nullptr);
+  CHECK(Reset(config, state) == nullptr);
+  CHECK(Step(state, kPhysicsStep) == nullptr);
   config.electric_field_strength_n_per_c = 20.0f;
-  CHECK(GetAirborneError(bodies, config) != nullptr);
+  CHECK(Reset(config, state) == nullptr);
+  CHECK(Step(state, kPhysicsStep) != nullptr);
 
   config.body_a.charged = false;
-  bodies = CreateScene(config);
-  CHECK(GetAirborneError(bodies, config) == nullptr);
-  bodies.clear();
-  CHECK(GetAirborneError(bodies, config) == nullptr);
+  CHECK(Reset(config, state) == nullptr);
+  CHECK(Step(state, kPhysicsStep) == nullptr);
+  state.bodies.clear();
+  CHECK(Step(state, kPhysicsStep) != nullptr);
 }
 
 void TestNonFiniteStateDetection() {
   SimulationConfig config;
-  std::vector<tiny2d::Rectangle> bodies = CreateScene(config);
-  CHECK(GetNonFiniteStateError(bodies) == nullptr);
-  bodies[0].position.x = std::numeric_limits<float>::quiet_NaN();
-  CHECK(GetNonFiniteStateError(bodies) != nullptr);
-  bodies = CreateScene(config);
-  bodies[1].velocity.y = std::numeric_limits<float>::infinity();
-  CHECK(GetNonFiniteStateError(bodies) != nullptr);
+  State state;
+  CHECK(Reset(config, state) == nullptr);
+  state.bodies[0].position.x = std::numeric_limits<float>::quiet_NaN();
+  CHECK(Step(state, kPhysicsStep) != nullptr);
+
+  CHECK(Reset(config, state) == nullptr);
+  state.bodies[1].velocity.y = std::numeric_limits<float>::infinity();
+  CHECK(Step(state, kPhysicsStep) != nullptr);
 }
 
 void TestDefaultScenarioLongRunAndDeterminism() {
   const SimulationConfig config;
-  std::vector<tiny2d::Rectangle> first = CreateScene(config);
-  std::vector<tiny2d::Rectangle> second = CreateScene(config);
+  State first;
+  State second;
+  CHECK(Reset(config, first) == nullptr);
+  CHECK(Reset(config, second) == nullptr);
   for (int step = 0; step < 20000; ++step) {
-    CHECK(StepScenario(&first, config));
-    for (const tiny2d::Rectangle& body : first) {
+    CHECK(Step(first, kPhysicsStep) == nullptr);
+    for (const tiny2d::Rectangle& body : first.bodies) {
       CheckBodyFinite(body);
     }
     if (step < 5000) {
-      CHECK(StepScenario(&second, config));
+      CHECK(Step(second, kPhysicsStep) == nullptr);
     }
   }
 
-  std::vector<tiny2d::Rectangle> replay = CreateScene(config);
+  State replay;
+  CHECK(Reset(config, replay) == nullptr);
   for (int step = 0; step < 5000; ++step) {
-    CHECK(StepScenario(&replay, config));
+    CHECK(Step(replay, kPhysicsStep) == nullptr);
   }
-  CHECK(replay.size() == second.size());
-  for (std::size_t i = 0; i < replay.size(); ++i) {
-    CHECK(Near(replay[i].position.x, second[i].position.x));
-    CHECK(Near(replay[i].position.y, second[i].position.y));
-    CHECK(Near(replay[i].velocity.x, second[i].velocity.x));
-    CHECK(Near(replay[i].velocity.y, second[i].velocity.y));
+  CHECK(replay.bodies.size() == second.bodies.size());
+  CHECK(NearTime(replay.time, second.time));
+  CHECK(replay.history.size() == second.history.size());
+  for (std::size_t i = 0; i < replay.bodies.size(); ++i) {
+    CHECK(Near(replay.bodies[i].position.x, second.bodies[i].position.x));
+    CHECK(Near(replay.bodies[i].position.y, second.bodies[i].position.y));
+    CHECK(Near(replay.bodies[i].velocity.x, second.bodies[i].velocity.x));
+    CHECK(Near(replay.bodies[i].velocity.y, second.bodies[i].velocity.y));
   }
 }
 
@@ -658,12 +803,13 @@ void TestFixedSeedSafeConfigurations() {
       continue;
     }
 
-    std::vector<tiny2d::Rectangle> bodies = CreateScene(config);
-    CHECK(Near(bodies[1].mass / GetEngineMassPerKilogram(config),
+    State state;
+    CHECK(Reset(config, state) == nullptr);
+    CHECK(Near(state.bodies[1].mass / GetEngineMassPerKilogram(config),
                config.body_b.mass_kg));
     for (int step = 0; step < 240; ++step) {
-      CHECK(StepScenario(&bodies, config));
-      for (const tiny2d::Rectangle& body : bodies) {
+      CHECK(Step(state, kPhysicsStep) == nullptr);
+      for (const tiny2d::Rectangle& body : state.bodies) {
         CheckBodyFinite(body);
       }
     }
@@ -681,11 +827,15 @@ struct NamedTest {
 
 }  // namespace
 
-int main() {
+int RunTests() {
   std::cout << std::unitbuf;
   const std::array tests = {
+      NamedTest{"fixed-step clock", TestFixedStepClock},
       NamedTest{"default and feature configurations",
                 TestDefaultAndFeatureConfigurations},
+      NamedTest{"state lifecycle contracts", TestStateLifecycleContracts},
+      NamedTest{"engine validation exceptions propagate",
+                TestEngineValidationExceptionsPropagate},
       NamedTest{"all float fields reject NaN and infinity",
                 TestEveryFloatFieldRejectsNonFiniteValues},
       NamedTest{"invalid ranges and degenerate inputs",
@@ -702,6 +852,9 @@ int main() {
       NamedTest{"body creation and clamping", TestBodyCreationAndClamping},
       NamedTest{"snapshot lookup and acceleration",
                 TestSnapshotLookupAndAcceleration},
+      NamedTest{"bounded simulation history", TestBoundedSimulationHistory},
+      NamedTest{"large simulation time advances",
+                TestLargeSimulationTimeStillAdvances},
       NamedTest{"signed telemetry", TestSignedTelemetry},
       NamedTest{"junction transitions", TestJunctionTransitionsPreserveSpeed},
       NamedTest{"surface constraint",
@@ -719,6 +872,11 @@ int main() {
     test.function();
     std::cout << "[PASS] " << test.name << '\n';
   }
-  std::cout << tests.size() << " tests, " << check_count << " checks passed\n";
+  std::cout << tests.size() << " tests, " << tiny2d::test::CheckCount()
+            << " checks passed\n";
   return 0;
 }
+
+}  // namespace tiny2d::sandbox::incline_spring
+
+int main() { return tiny2d::sandbox::incline_spring::RunTests(); }

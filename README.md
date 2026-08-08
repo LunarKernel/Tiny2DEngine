@@ -1,57 +1,70 @@
 # Tiny2D Engine
 
-一个面向高中与大学普通物理场景的二维模拟实验项目。V10 是正式版本 2.0，
-新增转动模型，同时完整保留 V9 斜面实验。
+> Product version: 2.0.0 / Latest experiment generation: V17 (unreleased)<br>
+> Language: C++17 · Graphics: SDL2 · UI: Dear ImGui · Build: CMake + vcpkg
 
-## 技术
+Tiny2D Engine is a small two-dimensional physics laboratory aimed at rigid
+bodies and introductory physics problems. The reusable physics core lives in
+`Engine/`; seven independent experiments live in `Sandbox/`. Every experiment
+offers SI-unit parameter entry, deterministic fixed-step integration, live
+telemetry, history inspection, and quantities that can be checked against
+analytical solutions.
 
-- C++17
-- CMake
-- SDL2
-- Dear ImGui
+Two numbering schemes coexist: `2.0.0` is the semantic product version
+(single-sourced from `vcpkg.json`); `V9` through `V17` are experiment
+generation codes, not product versions.
 
-## V10 新增内容
+## Experiments
 
-- 新增模型选择页，可独立进入 V9 或 V10
-- 新增 PivotLab：均匀杆与可调带电配重组成的物理摆
-- 可设置杆长、杆与配重质量、配重位置、初始角度和初始角速度
-- 支持重力力矩、均匀电场力矩和可选线性转动阻尼
-- 实时显示转动惯量、角运动、各项力矩、能量和小角度周期
-- 支持 Space 暂停、历史时刻查询以及电场/重力场方向箭头
-- 独立验证公式、能量、阻尼、非法输入和长期运行稳定性
+| Experiment | Topic |
+| --- | --- |
+| V9 Incline Laboratory | Incline, floor, spring, friction, uniform electric field |
+| V11 RollLab | Disk/hoop transition from sliding to pure rolling |
+| V13 Gravito-Orbit | Charged particle in uniform E, B, and gravity fields (includes the V12 preset) |
+| V14 Driven PivotLab | Physical pendulum with damping and periodic drive (includes V10 behavior) |
+| V15 ForceLab | Coupled translation and rotation driven through a centered or eccentric spring |
+| V16 ContactLab | Native circle bodies, per-body materials, impact and rolling contact |
+| V17 ImpactLab | Circle-circle continuous collision detection compared against the discrete path |
 
-## V9 保留功能
+## Build and test
 
-- 矩形刚体、重力、碰撞、摩擦与恢复系数
-- 斜面、底板、坡底双向过渡与左侧弹簧
-- 均匀电场、带电物块及离开约束面的安全检测
-- SI 单位与像素模拟自动换算
-- 可暂停、按时间查看的位置、速度和加速度监测
+From a VS2022 developer terminal:
 
-## 构建与运行
-
-```powershell
+```
 cmake --preset msvc-x64
 cmake --build --preset debug
-./build/Debug/Sandbox.exe
-```
-
-## 测试
-
-测试不依赖 Debug `assert`，因此 Debug 和 Release 都会执行完整判定。
-
-```powershell
-cmake --build --preset debug
 ctest --preset test-debug
-
-cmake --build --preset release
-ctest --preset test-release
 ```
 
-测试覆盖物理核心、非法数值、SI 换算、电场、斜面转场、弹簧、物理摆公式、
-能量与阻尼、长时间运行及固定随机种子的性质检查。物理核心遇到非有限值或
-不合法状态时会在继续更新前停止。
+Or run the full verification gate directly:
 
-## 当前状态
+```
+powershell -File tools/verify.ps1 -Profile Fast   # format + Debug + tests
+powershell -File tools/verify.ps1 -Profile Full   # adds Release/ASan/tidy
+```
 
-V10 / 2.0 — formal release。V9 可继续从启动页独立运行。
+## Code layout
+
+- `Engine/` — the reusable physics core (rectangular and circular rigid
+  bodies, SAT and circle contacts, impulse solver, optional circle-circle
+  CCD, semi-implicit Euler integration). The implementation is split by
+  responsibility under `Engine/internal/` (body_math, validation, contacts,
+  solver); the only public API is `tiny2d_engine.h`. The engine does not
+  depend on SDL or ImGui.
+- `Sandbox/` — the experiment layer. Each lab is a UI-free physics model
+  (`*_model.h/.cc`, the Config/State/Derived/Step quadruple, independently
+  testable) plus one UI file (`*_simulation.cc`). The shared application
+  shell lives in `Sandbox/app/lab_shell.h` (event loop, fixed-step
+  advancement, pause/replay); the experiment list lives in
+  `Sandbox/app/lab_registry.h`.
+- `tests/` — the assertion support header shared by every test suite.
+
+The dependency direction is fixed:
+`main → registry → lab UI → shell → model → Engine`.
+
+## More documentation
+
+- Implementation guide: [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)
+- Long-term roadmap: [ROADMAP.md](ROADMAP.md)
+- Change history: [CHANGELOG.md](CHANGELOG.md)
+- Contribution and verification workflow: [CONTRIBUTING.md](CONTRIBUTING.md)

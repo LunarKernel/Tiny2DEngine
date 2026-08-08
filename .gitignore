@@ -1,6 +1,12 @@
 build/
 vcpkg_installed/
+CMakeUserPresets.json
 *.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
 
 # VS Code temporary files
 .vscode/.browse.VC.db*
@@ -8,12 +14,21 @@ vcpkg_installed/
 .vscode/*.log
 .history/
 .vs/
+*.suo
+*.user
 
 # CMake generated files
 CMakeCache.txt
 CMakeFiles/
+CTestTestfile.cmake
+Testing/
+_deps/
 cmake_install.cmake
 compile_commands.json
 Makefile
 *.ninja
 .ninja_*
+
+# Operating-system files
+.DS_Store
+Thumbs.db
