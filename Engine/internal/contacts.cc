@@ -368,7 +368,10 @@ std::optional<double> FindCircleTimeOfImpact(const Circle& circle_a,
   if (discriminant < 0.0) {
     return std::nullopt;
   }
-  const double time = (-b - std::sqrt(discriminant)) / a;
+  // The guards above give b < 0 and c >= 0, so -b + sqrt(discriminant) never
+  // cancels; the textbook (-b - sqrt) / a root loses precision exactly in the
+  // grazing configurations this solver exists to resolve.
+  const double time = c / (-b + std::sqrt(discriminant));
   if (time < 0.0 || time > maximum_time) {
     return std::nullopt;
   }

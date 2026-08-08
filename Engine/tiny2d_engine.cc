@@ -391,8 +391,10 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
       };
 
       float remaining_time = delta_time;
-      // NOTE: O(n^2) scans and a 4N event cap fit the supported small
-      // ImpactLab; add an event queue only when a dense experiment needs it.
+      // NOTE: O(n^2) scans, a 4N event cap, and the speculative body copies
+      // above fit the supported small ImpactLab; add an event queue and
+      // caller-provided scratch buffers only when a dense experiment
+      // measurably needs them.
       const std::size_t maximum_impacts = circles.size() * kSolverIterations;
       for (std::size_t impact_count = 0;
            impact_count < maximum_impacts && remaining_time > 0.0f;

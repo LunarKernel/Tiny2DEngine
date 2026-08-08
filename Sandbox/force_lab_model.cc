@@ -405,6 +405,10 @@ bool StepForceLab(const ForceLabConfig& config, float delta_time,
   AddForceAtPoint(next.body, before.spring_force_n,
                   before.attachment_position_m);
 
+  // This accounting relies on the Engine's documented integration order:
+  // velocity = (v0 + F/m * dt) * exp(-rate * dt), force first, damping
+  // second. TestPerBodyExponentialDamping in Engine/tiny2d_engine_test.cc
+  // locks that contract, so a reorder fails there before this drifts.
   const float pre_damping_velocity_x =
       static_cast<float>(static_cast<double>(next.body.velocity.x) +
                          static_cast<double>(next.body.applied_force.x) /
