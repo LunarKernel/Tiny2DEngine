@@ -3,7 +3,7 @@
 - **Document status:** Proposal
 - **Project baseline:** V14 development line, based on the 2.0 release
 - **Target milestone:** Tiny2D Physics Lab 3.0
-- **Last updated:** 2026-08-07
+- **Last updated:** 2026-08-11
 
 ## 1. Purpose
 
@@ -28,7 +28,7 @@ recommended, and optional work respectively.
 
 ## 2. Current Baseline
 
-The current development line contains seven independent experiment families:
+The current development line contains eight independent experiment families:
 
 - **V9 Incline Laboratory:** blocks, an incline, a floor, collisions,
   friction, a spring, a uniform electric field, SI calibration, telemetry, and
@@ -53,21 +53,36 @@ The current development line contains seven independent experiment families:
   `TestFastCircleTravelsBeyondDiameterWithoutTunneling`) and in the V17
   suite (`TestSupportedGrazingTunnelingAndCcd`) rather than in the V16
   suite the gate originally named.
+- **V18 AtwoodLab (delivered):** two hanging blocks connected by a
+  massless, inextensible, non-slipping rope over a pinned pulley with real
+  rotational inertia, built on the engine's first bilateral constraints
+  (`RevolutePin`, `PulleyRope`) with tension and pin-force telemetry. The
+  §9 acceptance evidence lives in `Engine/tiny2d_engine_test.cc`
+  (`TestPulleyRopeMatchesAtwoodAcceleration`,
+  `TestPulleyRopeLengthDriftStaysBounded`) and the V18 suite
+  (`TestReferenceAccelerationTensionsAndPinForce`,
+  `TestBalancedDriftRopeLengthAndFiniteSixtySeconds`,
+  `TestConservativeEnergyBudget`, `TestDampedEnergyAccounting`).
 
 The reusable engine provides rotating rectangular and circular bodies, SAT
 collision detection, one- and two-point contact manifolds, impulse response,
 friction, restitution, per-body materials, applied forces and torques,
-optional circle-circle CCD, static bodies, fixed rotation, field
+optional circle-circle CCD, revolute-pin and pulley-rope bilateral
+constraints with reaction telemetry, static bodies, fixed rotation, field
 acceleration, and boundary collisions. The engine implementation is split
-into `Engine/internal/` units (body_math, validation, contacts, solver)
-behind an unchanged public header. The Sandbox layer provides model-specific
-SI units, a shared application shell (`Sandbox/app/lab_shell.h`), a lab
-registry, bounded history, parameter interfaces, monitoring, and
-visualization.
+into `Engine/internal/` units (body_math, validation, contacts, solver,
+constraints) behind an unchanged public header. The Sandbox layer provides
+model-specific SI units, a shared application shell
+(`Sandbox/app/lab_shell.h`), a lab registry, bounded history, parameter
+interfaces, monitoring, and visualization.
 
 The main limitations relevant to this roadmap are:
 
-- no general joint, rope, or bilateral constraint solver;
+- constraints cover only world-anchored revolute pins and pulley ropes: the
+  rope is bilateral (slack is not modeled), it attaches at each body's
+  center of mass, its pulley anchors are fixed world points, and there is
+  no revolute joint between two dynamic bodies yet (that is the V19
+  prerequisite);
 - no time-series plotting, data export, or experiment file format;
 - no general-purpose contact cache, warm start, or sleeping system.
 
@@ -398,10 +413,12 @@ The project is ready for a formal 3.0 release when:
 
 ## 17. Recommended Next Action
 
-V15, V16, and V17 are delivered (see §2). The next feature proposal SHOULD
-be **V18 AtwoodLab: Massive Pulley and Rope Constraints** (§9).
+V15 through V18 are delivered (see §2). The next feature proposal SHOULD be
+**V19 ChaosLab: Double Pendulum** (§10).
 
-The V18 proposal should define the constraint API, coordinate and unit
-conventions, the analytical Atwood reference case with a massive pulley,
-and exact regression tolerances before implementation begins, keeping the
-one-capability-one-experiment pairing used by V15–V17.
+The V19 proposal must first extend the constraint layer with a revolute
+joint between two dynamic bodies (V18 delivered only world-anchored pins),
+then define the double-pendulum model, its small-angle normal-mode anchors,
+the paired-run divergence telemetry, and exact regression tolerances before
+implementation begins, keeping the one-capability-one-experiment pairing
+used by V15–V18.

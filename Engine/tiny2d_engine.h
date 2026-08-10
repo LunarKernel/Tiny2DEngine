@@ -183,6 +183,106 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
             float gravity = 98.1f, float restitution_velocity_threshold = 20.0f,
             bool enable_circle_circle_ccd = false);
 
+// Identifies one body inside the vectors passed to the constrained Update:
+// kind selects the vector and index is the zero-based position within it.
+enum class BodyKind {
+  kRectangle,
+  kCircle,
+};
+
+struct BodyRef {
+  BodyKind kind{BodyKind::kRectangle};
+  int index{};
+};
+
+// Pins a dynamic circle's center of mass to a fixed world point while its
+// rotation stays free. world_anchor uses world length units; the anchor disk
+// (world_anchor extended by the circle's radius) must fit inside the
+// simulation area so the post-snap state can never fail the next call's
+// area validation. Each circle may carry at most one pin. fixed_rotation is
+// allowed on a plainly pinned circle.
+struct RevolutePin {
+  int circle_index{};
+  Vec2 world_anchor{};
+};
+
+// A massless, inextensible, non-slipping ideal rope:
+//   body_a COM -- anchor_a -- (arc over the pinned pulley) -- anchor_b --
+//   body_b COM.
+// anchor_a and anchor_b are the fixed world points where each straight
+// segment leaves the pulley (for a hanging configuration, the pulley's
+// horizontal tangent points). segment_length_sum is the constrained value of
+// |p_a - anchor_a| + |p_b - anchor_b| in length units; the constant wrap arc
+// is excluded. No slip couples the rope to the pulley's angular velocity
+// through its radius: with bodies hanging below their anchors, positive
+// (clockwise) pulley rotation lowers body_b and raises body_a. The rope is
+// bilateral (it can push as well as pull); slack is not modeled. Rope ends
+// attach at each body's center of mass, must be dynamic, must be distinct
+// from each other and from the pulley, and must not themselves be pinned.
+// The pulley circle must carry a RevolutePin and must not use
+// fixed_rotation. The engine treats world anchors and segment_length_sum as
+// targets: values inconsistent with the body positions produce a one-step
+// projection toward the targets, not an error.
+struct PulleyRope {
+  BodyRef body_a{};
+  BodyRef body_b{};
+  int pulley_circle_index{};
+  Vec2 anchor_a{};
+  Vec2 anchor_b{};
+  float segment_length_sum{};
+};
+
+// Per-rope constraint force report in force units. Positive tension means a
+// taut rope pulling that body toward its anchor. Both values are zero when
+// delta_time is zero.
+struct RopeReaction {
+  float tension_a{};
+  float tension_b{};
+};
+
+// pin_forces[i] is the force the pin exerts on its circle (for a pulley
+// hanging in gravity, approximately its weight pointing up, negative y). It
+// reports only the pin impulse: rope anchors are fixed world points, so the
+// rope wrap load never couples to the pulley's linear degree of freedom and
+// is not included; a physical axle load is assembled by the caller as
+// pulley weight plus both tensions. Zero when delta_time is zero.
+struct ConstraintReactions {
+  std::vector<Vec2> pin_forces;
+  std::vector<RopeReaction> rope_tensions;
+};
+
+// Advances the mixed world under bilateral constraints. This is the single
+// step path: the mixed overload above forwards here with empty constraint
+// vectors, preserving its documented behavior bit for bit. Constraint
+// velocity errors are removed by impulses after force integration and
+// damping but before positions advance; contact resolution runs unchanged;
+// pin and rope position errors are then fully projected out, so rope-length
+// drift does not accumulate. A contact impulse applied after the constraint
+// solve can violate a constraint velocity within one step; the next step's
+// solve removes it.
+//
+// Validation extends the mixed overload's rules: pin and rope indices must
+// be in range and reference dynamic bodies, pins must be unique per circle,
+// rope ends must be distinct unpinned bodies, the rope pulley must be
+// pinned and rotationally free, anchors must be finite (pin anchors must fit
+// the area as documented on RevolutePin), segment_length_sum must be finite
+// and positive, and every rope end must start at least 1e-6 length units
+// from its anchor so the segment direction is well defined.
+// enable_circle_circle_ccd must be false whenever any constraint is present.
+// Invalid input throws std::invalid_argument before any state (including
+// *reactions) is modified. When reactions is non-null, a successful call
+// resizes its vectors to match the constraint counts and fills them; a
+// zero delta_time reports zero reactions while still resolving constraint
+// velocities and positions.
+void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
+            const std::vector<RevolutePin>& revolute_pins,
+            const std::vector<PulleyRope>& pulley_ropes, float delta_time,
+            float area_width, float area_height, float restitution,
+            float friction = 0.4f, Vec2 electric_field = {},
+            float gravity = 98.1f, float restitution_velocity_threshold = 20.0f,
+            bool enable_circle_circle_ccd = false,
+            ConstraintReactions* reactions = nullptr);
+
 }  // namespace tiny2d
 
 #endif  // TINY2DENGINE_ENGINE_TINY2D_ENGINE_H_

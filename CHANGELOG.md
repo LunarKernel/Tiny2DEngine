@@ -8,6 +8,17 @@ not product versions.
 
 ### Added
 
+- V18 AtwoodLab: two hanging blocks on a massless, inextensible,
+  non-slipping rope over a pinned pulley with real rotational inertia,
+  validated against the analytical Atwood acceleration, tension pair,
+  no-slip coupling, rope-length drift, and conservative and damped energy
+  budgets.
+- Engine bilateral constraints: `RevolutePin` (a dynamic circle pinned to a
+  world anchor with free rotation) and `PulleyRope` (a center-of-mass rope
+  over a pinned pulley with no-slip rotational coupling), solved by
+  per-rope 2x2 velocity impulses plus full position projection, with rope
+  tension and pin-force reaction telemetry through a new constrained
+  `Update` overload.
 - V17 ImpactLab for deterministic circle-circle time-of-impact comparisons
   against the previous discrete collision path.
 - V16 ContactLab for native circle impacts, per-body collision materials, and
@@ -24,6 +35,12 @@ not product versions.
 
 ### Changed
 
+- All three public `Update` overloads now share one step path: the mixed
+  overload forwards to the constrained overload with empty constraint
+  sets. The integration loop was split into velocity and position phases
+  so the constraint solve can run between them; golden trajectory
+  checkpoints recorded before the restructuring keep the no-constraint
+  path bit-identical.
 - The engine implementation was split into `Engine/internal/` units
   (body_math, validation, contacts, solver) behind an unchanged public
   header, and the two `Update` overloads were unified onto one step path

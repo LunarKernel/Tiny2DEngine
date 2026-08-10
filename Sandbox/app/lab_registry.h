@@ -20,7 +20,12 @@ struct LabInfo {
   SimulationResult (*run)(SDL_Renderer* renderer);
 };
 
-inline constexpr std::array<LabInfo, 7> kLabs = {{
+inline constexpr std::array<LabInfo, 8> kLabs = {{
+    {"V18 AtwoodLab: Massive Pulley and Rope",
+     "Two hanging masses on an inextensible, non-slipping rope over a "
+     "pinned pulley with real rotational inertia, tension telemetry, and "
+     "the analytical Atwood acceleration.",
+     "Open V18 AtwoodLab", &RunAtwoodLabSimulation},
     {"V17 ImpactLab: Continuous Circle Impacts",
      "Compare discrete collision detection with circle-circle time of "
      "impact for grazing and diameter-skipping motion.",

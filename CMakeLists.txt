@@ -47,6 +47,7 @@ if(TINY2D_BUILD_SANDBOX)
 endif()
 
 add_library(Tiny2DEngine STATIC
+    Engine/internal/constraints.cc
     Engine/internal/contacts.cc
     Engine/internal/solver.cc
     Engine/internal/validation.cc
@@ -62,6 +63,7 @@ tiny2d_enable_warnings(Tiny2DEngine)
 
 if(TINY2D_BUILD_SANDBOX OR BUILD_TESTING)
   add_library(Tiny2DSimulationModels STATIC
+      Sandbox/atwood_lab_model.cc
       Sandbox/contact_lab_model.cc
       Sandbox/force_lab_model.cc
       Sandbox/impact_lab_model.cc
@@ -82,6 +84,7 @@ endif()
 
 if(TINY2D_BUILD_SANDBOX)
   add_executable(Sandbox WIN32
+      Sandbox/atwood_lab_simulation.cc
       Sandbox/contact_lab_simulation.cc
       Sandbox/force_lab_simulation.cc
       Sandbox/impact_lab_simulation.cc
@@ -200,4 +203,15 @@ if(BUILD_TESTING)
 
   add_test(NAME Tiny2DImpactLabTests COMMAND Tiny2DImpactLabTests)
   set_tests_properties(Tiny2DImpactLabTests PROPERTIES TIMEOUT 30)
+
+  add_executable(Tiny2DAtwoodLabTests
+      Sandbox/atwood_lab_test.cc
+  )
+
+  target_link_libraries(Tiny2DAtwoodLabTests PRIVATE Tiny2DSimulationModels
+                                                     Tiny2DTestSupport)
+  tiny2d_enable_warnings(Tiny2DAtwoodLabTests)
+
+  add_test(NAME Tiny2DAtwoodLabTests COMMAND Tiny2DAtwoodLabTests)
+  set_tests_properties(Tiny2DAtwoodLabTests PROPERTIES TIMEOUT 30)
 endif()

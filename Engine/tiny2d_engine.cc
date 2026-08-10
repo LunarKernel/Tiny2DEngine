@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "internal/body_math.h"
+#include "internal/constraints.h"
 #include "internal/contacts.h"
 #include "internal/solver.h"
 #include "internal/validation.h"
@@ -219,11 +220,27 @@ void Update(std::vector<Rectangle>& squares, float delta_time, float area_width,
          false);
 }
 
+// The mixed overload forwards to the constrained step with empty constraint
+// sets, so all three public Update entry points share one integration and
+// solver path. Equivalence is protected by the golden checkpoint test and
+// TestMixedUpdateMatchesConstrainedUpdateWithoutConstraints.
 void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
             float delta_time, float area_width, float area_height,
             float restitution, float friction, Vec2 electric_field,
             float gravity, float restitution_velocity_threshold,
             bool enable_circle_circle_ccd) {
+  Update(rectangles, circles, {}, {}, delta_time, area_width, area_height,
+         restitution, friction, electric_field, gravity,
+         restitution_velocity_threshold, enable_circle_circle_ccd, nullptr);
+}
+
+void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
+            const std::vector<RevolutePin>& revolute_pins,
+            const std::vector<PulleyRope>& pulley_ropes, float delta_time,
+            float area_width, float area_height, float restitution,
+            float friction, Vec2 electric_field, float gravity,
+            float restitution_velocity_threshold, bool enable_circle_circle_ccd,
+            ConstraintReactions* reactions) {
   Require(std::isfinite(delta_time) && delta_time >= 0.0f,
           "Delta time must be finite and non-negative.");
   Require(std::isfinite(area_width) && std::isfinite(area_height) &&
@@ -239,6 +256,11 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
   Require(std::isfinite(restitution_velocity_threshold) &&
               restitution_velocity_threshold >= 0.0f,
           "Restitution velocity threshold must be finite and non-negative.");
+  const bool has_constraints = !revolute_pins.empty() || !pulley_ropes.empty();
+  Require(!enable_circle_circle_ccd || !has_constraints,
+          "Circle-circle CCD cannot be combined with constraints.");
+  ValidateConstraints(rectangles, circles, revolute_pins, pulley_ropes,
+                      area_width, area_height);
 
   const auto validate_integration = [&](const auto& body) {
     if (body.mass == 0.0f) {
@@ -309,7 +331,15 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
     validate_integration(circle);
   }
 
-  const auto integrate = [&](auto& body) {
+  // The fused integrate is split into a velocity phase and a position phase
+  // so the constraint velocity solve can run between them. Per body the
+  // operation sequence of velocity-then-position is exactly the historical
+  // fused sequence, and bodies integrate independently, so the split is
+  // trajectory-identical for the no-constraint path; the golden checkpoint
+  // test locks this bit for bit. The velocity phase keeps the dt == 0
+  // fixed-rotation zeroing and the position phase keeps the dt == 0 angle
+  // renormalization the fused code performed.
+  const auto integrate_velocity = [&](auto& body) {
     if (InverseMass(body) == 0.0f) {
       return;
     }
@@ -348,11 +378,20 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
       body.angular_velocity *=
           std::exp(-body.angular_damping_rate * delta_time);
     }
+  };
+  const auto integrate_position = [&](auto& body) {
+    if (InverseMass(body) == 0.0f) {
+      return;
+    }
     body.position = Add(body.position, Multiply(body.velocity, delta_time));
     if (!body.fixed_rotation) {
       body.angle = std::remainder(
           body.angle + body.angular_velocity * delta_time, kTwoPi);
     }
+  };
+  const auto integrate = [&](auto& body) {
+    integrate_velocity(body);
+    integrate_position(body);
   };
 
   bool use_circle_circle_ccd = false;
@@ -433,12 +472,28 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
     }
   }
 
+  ConstraintImpulses constraint_impulses;
+  if (has_constraints) {
+    constraint_impulses.pin_impulses.resize(revolute_pins.size());
+    constraint_impulses.rope_impulses.resize(pulley_ropes.size());
+  }
+
   if (!use_circle_circle_ccd) {
     for (Rectangle& rectangle : rectangles) {
-      integrate(rectangle);
+      integrate_velocity(rectangle);
     }
     for (Circle& circle : circles) {
-      integrate(circle);
+      integrate_velocity(circle);
+    }
+    if (has_constraints) {
+      SolveConstraintVelocities(rectangles, circles, revolute_pins,
+                                pulley_ropes, &constraint_impulses);
+    }
+    for (Rectangle& rectangle : rectangles) {
+      integrate_position(rectangle);
+    }
+    for (Circle& circle : circles) {
+      integrate_position(circle);
     }
   }
 
@@ -491,6 +546,29 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
       ResolveWindowCollision(circle, area_width, area_height, restitution,
                              friction, allow_restitution,
                              restitution_velocity_threshold);
+    }
+  }
+
+  if (has_constraints) {
+    ProjectConstraintPositions(rectangles, circles, revolute_pins,
+                               pulley_ropes);
+  }
+  if (reactions != nullptr) {
+    reactions->pin_forces.assign(revolute_pins.size(), Vec2{});
+    reactions->rope_tensions.assign(pulley_ropes.size(), RopeReaction{});
+    if (delta_time > 0.0f) {
+      const float inverse_delta_time = 1.0f / delta_time;
+      for (std::size_t i = 0; i < revolute_pins.size(); ++i) {
+        reactions->pin_forces[i] =
+            Multiply(constraint_impulses.pin_impulses[i], inverse_delta_time);
+      }
+      for (std::size_t i = 0; i < pulley_ropes.size(); ++i) {
+        reactions->rope_tensions[i] = {
+            -constraint_impulses.rope_impulses[i].impulse_a *
+                inverse_delta_time,
+            -constraint_impulses.rope_impulses[i].impulse_b *
+                inverse_delta_time};
+      }
     }
   }
 

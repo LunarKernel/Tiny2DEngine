@@ -1,6 +1,6 @@
 # Tiny2D Engine Developer Guide
 
-> Current experiment generation: V17 (unreleased) / Latest release: 2.0.0
+> Current experiment generation: V18 (unreleased) / Latest release: 2.0.0
 > (V10)<br>
 > C++17 · SDL2 · Dear ImGui · CMake + vcpkg
 
@@ -53,6 +53,11 @@ namespace `tiny2d::internal` with no stability guarantee:
   window-wall contacts. The solver templates accept any body type that
   exposes mass, pose, and velocity state, so rectangle-circle pairs resolve
   through the same code path as same-shape pairs.
+- `constraints.{h,cc}` — bilateral constraint resolution: revolute pins and
+  pulley-rope constraints. Validation, the per-round velocity solve (a
+  direct 2x2 block solve per rope, coupled to the pulley's angular
+  velocity), and the full position projection that keeps rope-length drift
+  from accumulating.
 
 ## 3. Engine semantics
 
@@ -75,11 +80,29 @@ namespace `tiny2d::internal` with no stability guarantee:
 - **Validation:** every public operation validates completely before
   mutating anything and throws `std::invalid_argument` on invalid input, so
   failure paths leave inputs unchanged.
-- **Stepping:** there is exactly one integration and solver path. The
-  rectangle-only `Update` overload delegates to the mixed rectangle/circle
-  overload with no circles, CCD disabled, and the legacy restitution
-  velocity threshold of 20. `TestLegacyUpdateMatchesMixedUpdateTrajectories`
-  keeps the two bit-identical and must not be weakened.
+- **Stepping:** there is exactly one integration and solver path behind
+  three public `Update` overloads. The rectangle-only overload delegates to
+  the mixed rectangle/circle overload (no circles, CCD disabled, legacy
+  restitution threshold 20), which forwards to the constrained overload
+  with empty constraint sets. `TestLegacyUpdateMatchesMixedUpdateTrajectories`
+  and `TestMixedUpdateMatchesConstrainedUpdateWithoutConstraints` keep the
+  chain bit-identical, and `TestGoldenMixedTrajectoryCheckpoints` pins the
+  whole no-constraint trajectory to checkpoints recorded before the
+  constrained step existed; none of the three may be weakened.
+- **Constraints:** `RevolutePin` pins a dynamic circle's center to a world
+  anchor with rotation free; `PulleyRope` is a massless, inextensible,
+  non-slipping rope from one body's center of mass over a pinned pulley to
+  another body's center of mass, with fixed world anchor points where the
+  segments leave the pulley. Constraint velocity errors are removed by
+  impulses between force integration and position advancement (each rope is
+  an exact 2x2 block solve coupled to the pulley's angular velocity);
+  contact resolution runs unchanged; pin and rope position errors are then
+  fully projected out, so rope-length drift stays at float-rounding level.
+  Reported reactions: rope tensions (positive = taut) and the pin force,
+  which excludes the rope wrap load because rope anchors are fixed world
+  points — labs assemble the physical axle load as pulley weight plus both
+  tensions. The rope is bilateral (no slack modeling), and CCD cannot be
+  combined with constraints; both limits are validated, not silent.
 - **Continuous collision detection:** when `enable_circle_circle_ccd` is
   true, the step first integrates speculatively; if a circle pair that is
   separated at both endpoints would cross inside the step, the world is
@@ -134,6 +157,7 @@ and `sim_ui.h` (slider-plus-input widgets and arrow drawing).
 | V15 ForceLab | Rectangle driven through a centered or eccentric spring attachment | Centered-case period, energy budget with damping loss |
 | V16 ContactLab | Circle impacts and rolling with per-body materials | Momentum/energy checks, rolling slip tolerance |
 | V17 ImpactLab | Discrete vs CCD lanes over one fixed step | Swept-circle entry/exit times, expected post-impact state, per-lane error terms |
+| V18 AtwoodLab | Two hanging blocks on a rope over a pinned massive pulley | a = (m_b - m_a) g / (m_a + m_b + I/R^2), tension pair, no-slip coupling, rope-length drift, energy budget |
 
 ## 6. Adding a lab
 
