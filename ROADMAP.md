@@ -3,7 +3,7 @@
 - **Document status:** Proposal
 - **Project baseline:** V14 development line, based on the 2.0 release
 - **Target milestone:** Tiny2D Physics Lab 3.0
-- **Last updated:** 2026-08-11
+- **Last updated:** 2026-08-11 (V19 delivered)
 
 ## 1. Purpose
 
@@ -28,7 +28,7 @@ recommended, and optional work respectively.
 
 ## 2. Current Baseline
 
-The current development line contains eight independent experiment families:
+The current development line contains nine independent experiment families:
 
 - **V9 Incline Laboratory:** blocks, an incline, a floor, collisions,
   friction, a spring, a uniform electric field, SI calibration, telemetry, and
@@ -63,12 +63,27 @@ The current development line contains eight independent experiment families:
   (`TestReferenceAccelerationTensionsAndPinForce`,
   `TestBalancedDriftRopeLengthAndFiniteSixtySeconds`,
   `TestConservativeEnergyBudget`, `TestDampedEnergyAccounting`).
+- **V19 ChaosLab (delivered):** a point-mass double pendulum on the
+  engine's new rod constraints (`AnchorRod`, `LinkRod` inside a
+  `ConstraintSet`), with a built-in shadow run for divergence telemetry.
+  The §10 acceptance evidence lives in `Engine/tiny2d_engine_test.cc`
+  (`TestAnchorRodPendulumMatchesAnalyticalPeriod`,
+  `TestLinkRodKeepsDistanceAndReportsCompression`,
+  `TestRodAndRopeShareBodyStaysFiniteAndDeterministic`) and the V19 suite
+  (`TestSlowModePeriod`, `TestFastModePeriod`,
+  `TestLargeAmplitudeConservativeEnergy`,
+  `TestChaoticRodDriftAndBoundedLoss`, `TestChaoticDivergence`). The
+  conservative energy criterion binds at the 25-degree large-amplitude
+  preset; the chaotic 120-degree reference is bound by rod-drift,
+  divergence, determinism, and finiteness criteria, with its numerical
+  energy loss quantified as a limitation below.
 
 The reusable engine provides rotating rectangular and circular bodies, SAT
 collision detection, one- and two-point contact manifolds, impulse response,
 friction, restitution, per-body materials, applied forces and torques,
-optional circle-circle CCD, revolute-pin and pulley-rope bilateral
-constraints with reaction telemetry, static bodies, fixed rotation, field
+optional circle-circle CCD, bilateral constraints with reaction telemetry
+(revolute pins, pulley ropes, world-anchored and body-to-body rods,
+composable through a `ConstraintSet`), static bodies, fixed rotation, field
 acceleration, and boundary collisions. The engine implementation is split
 into `Engine/internal/` units (body_math, validation, contacts, solver,
 constraints) behind an unchanged public header. The Sandbox layer provides
@@ -78,11 +93,18 @@ interfaces, monitoring, and visualization.
 
 The main limitations relevant to this roadmap are:
 
-- constraints cover only world-anchored revolute pins and pulley ropes: the
-  rope is bilateral (slack is not modeled), it attaches at each body's
-  center of mass, its pulley anchors are fixed world points, and there is
-  no revolute joint between two dynamic bodies yet (that is the V19
-  prerequisite);
+- constraints attach at centers of mass: COM rod links between dynamic
+  bodies are delivered (exactly a revolute chain for point masses), while
+  a general body-body revolute with attachment offsets and angular
+  coupling remains future work with no current consumer; the rope is
+  bilateral (slack is not modeled) and its pulley anchors are fixed world
+  points;
+- velocity-projection constraint stepping loses mechanical energy to
+  first order in dt under fast rotation, at a rate scaling as
+  v^4 dt / L^2; on whip-heavy chaotic trajectories the loss reaches
+  several percent of the released energy per minute even at the ChaosLab's
+  32x substepping, so energy acceptance binds in the 25-degree regime and
+  the upgrade path is the §14 energy-consistent-integration trigger;
 - no time-series plotting, data export, or experiment file format;
 - no general-purpose contact cache, warm start, or sleeping system.
 
@@ -380,6 +402,7 @@ The following capabilities remain deferred until a measurable trigger exists:
 | General convex polygons | A committed experiment cannot be represented by rectangles and circles |
 | Full-project `double` conversion | Precision tests show `float` is the limiting error source |
 | Test-framework migration | The current lightweight tests prevent practical filtering, diagnosis, or reporting |
+| Energy-consistent constraint integration | An experiment needs sub-1% energy budgets on fast-rotating constraint trajectories (the v^4 dt / L^2 projection loss documented in §2 becomes the limiting error source) |
 
 ## 15. Explicit Non-Goals
 
@@ -413,12 +436,12 @@ The project is ready for a formal 3.0 release when:
 
 ## 17. Recommended Next Action
 
-V15 through V18 are delivered (see §2). The next feature proposal SHOULD be
-**V19 ChaosLab: Double Pendulum** (§10).
+V15 through V19 are delivered (see §2). The next feature proposal SHOULD be
+**V20 StackLab: Persistent Contact Stability** (§11).
 
-The V19 proposal must first extend the constraint layer with a revolute
-joint between two dynamic bodies (V18 delivered only world-anchored pins),
-then define the double-pendulum model, its small-angle normal-mode anchors,
-the paired-run divergence telemetry, and exact regression tolerances before
+The V20 proposal should define the reference stack scenario, the solver
+stabilization scope (iterations, persistent contact identifiers, cached
+impulses, warm starting), and exact resting-contact tolerances before
 implementation begins, keeping the one-capability-one-experiment pairing
-used by V15–V18.
+used by V15–V19. §11's acceptance criteria already specify the ten-body
+60-second reference stack.

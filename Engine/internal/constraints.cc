@@ -11,8 +11,9 @@
 namespace tiny2d::internal {
 namespace {
 
-// Below this segment length the rope direction is numerically undefined.
-constexpr float kMinimumRopeSegmentLength = 0.000001f;
+// Below this endpoint separation a constraint axis is numerically
+// undefined.
+constexpr float kMinimumConstraintLength = 0.000001f;
 
 bool IsKnownBodyKind(BodyKind kind) {
   switch (kind) {
@@ -36,8 +37,14 @@ bool IsPinnedCircle(const std::vector<RevolutePin>& revolute_pins, int index) {
   return false;
 }
 
-// Mutable center-of-mass view of a rope end body. Rope ends attach at the
-// center of mass, so only position, velocity, and inverse mass matter.
+bool IsPinnedRef(const std::vector<RevolutePin>& revolute_pins, BodyRef ref) {
+  return ref.kind == BodyKind::kCircle &&
+         IsPinnedCircle(revolute_pins, ref.index);
+}
+
+// Mutable center-of-mass view of a constraint end body. Ropes and rods
+// attach at the center of mass, so only position, velocity, and inverse
+// mass matter.
 struct EndView {
   Vec2* position;
   Vec2* velocity;
@@ -72,6 +79,13 @@ bool InRange(int index, std::size_t size) {
   return index >= 0 && static_cast<std::size_t>(index) < size;
 }
 
+bool EndInRange(const std::vector<Rectangle>& rectangles,
+                const std::vector<Circle>& circles, BodyRef ref) {
+  return ref.kind == BodyKind::kRectangle
+             ? InRange(ref.index, rectangles.size())
+             : InRange(ref.index, circles.size());
+}
+
 double SegmentLength(Vec2 position, Vec2 anchor) {
   const double delta_x =
       static_cast<double>(position.x) - static_cast<double>(anchor.x);
@@ -84,9 +98,9 @@ double SegmentLength(Vec2 position, Vec2 anchor) {
 
 void ValidateConstraints(const std::vector<Rectangle>& rectangles,
                          const std::vector<Circle>& circles,
-                         const std::vector<RevolutePin>& revolute_pins,
-                         const std::vector<PulleyRope>& pulley_ropes,
-                         float area_width, float area_height) {
+                         const ConstraintSet& constraints, float area_width,
+                         float area_height) {
+  const std::vector<RevolutePin>& revolute_pins = constraints.revolute_pins;
   for (std::size_t i = 0; i < revolute_pins.size(); ++i) {
     const RevolutePin& pin = revolute_pins[i];
     Require(InRange(pin.circle_index, circles.size()),
@@ -106,16 +120,12 @@ void ValidateConstraints(const std::vector<Rectangle>& rectangles,
     }
   }
 
-  for (const PulleyRope& rope : pulley_ropes) {
+  for (const PulleyRope& rope : constraints.pulley_ropes) {
     Require(
         IsKnownBodyKind(rope.body_a.kind) && IsKnownBodyKind(rope.body_b.kind),
         "A rope end uses an unknown body kind.");
-    const auto end_in_range = [&](BodyRef ref) {
-      return ref.kind == BodyKind::kRectangle
-                 ? InRange(ref.index, rectangles.size())
-                 : InRange(ref.index, circles.size());
-    };
-    Require(end_in_range(rope.body_a) && end_in_range(rope.body_b),
+    Require(EndInRange(rectangles, circles, rope.body_a) &&
+                EndInRange(rectangles, circles, rope.body_b),
             "A rope end references a body index out of range.");
     Require(EndMass(rectangles, circles, rope.body_a) > 0.0f &&
                 EndMass(rectangles, circles, rope.body_b) > 0.0f,
@@ -126,11 +136,8 @@ void ValidateConstraints(const std::vector<Rectangle>& rectangles,
     Require(!SameBody(rope.body_a, pulley_ref) &&
                 !SameBody(rope.body_b, pulley_ref),
             "A rope end must not reference the rope's pulley.");
-    const auto end_is_pinned = [&](BodyRef ref) {
-      return ref.kind == BodyKind::kCircle &&
-             IsPinnedCircle(revolute_pins, ref.index);
-    };
-    Require(!end_is_pinned(rope.body_a) && !end_is_pinned(rope.body_b),
+    Require(!IsPinnedRef(revolute_pins, rope.body_a) &&
+                !IsPinnedRef(revolute_pins, rope.body_b),
             "A rope end must not reference a pinned circle.");
     Require(InRange(rope.pulley_circle_index, circles.size()),
             "A rope references a pulley circle index out of range.");
@@ -149,28 +156,68 @@ void ValidateConstraints(const std::vector<Rectangle>& rectangles,
         EndPosition(rectangles, circles, rope.body_a), rope.anchor_a);
     const double length_b = SegmentLength(
         EndPosition(rectangles, circles, rope.body_b), rope.anchor_b);
-    Require(length_a >= kMinimumRopeSegmentLength &&
-                length_b >= kMinimumRopeSegmentLength,
+    Require(length_a >= kMinimumConstraintLength &&
+                length_b >= kMinimumConstraintLength,
             "Rope ends must start away from their anchors.");
+  }
+
+  for (const AnchorRod& rod : constraints.anchor_rods) {
+    Require(IsKnownBodyKind(rod.body.kind),
+            "An anchor rod uses an unknown body kind.");
+    Require(EndInRange(rectangles, circles, rod.body),
+            "An anchor rod references a body index out of range.");
+    Require(EndMass(rectangles, circles, rod.body) > 0.0f,
+            "An anchor rod must reference a dynamic body.");
+    Require(!IsPinnedRef(revolute_pins, rod.body),
+            "An anchor rod must not reference a pinned circle.");
+    Require(IsFinite(rod.world_anchor),
+            "An anchor rod anchor must contain only finite values.");
+    Require(std::isfinite(rod.length) && rod.length > 0.0f,
+            "An anchor rod length must be finite and positive.");
+    Require(SegmentLength(EndPosition(rectangles, circles, rod.body),
+                          rod.world_anchor) >= kMinimumConstraintLength,
+            "An anchor rod body must start away from its anchor.");
+  }
+
+  for (const LinkRod& rod : constraints.link_rods) {
+    Require(
+        IsKnownBodyKind(rod.body_a.kind) && IsKnownBodyKind(rod.body_b.kind),
+        "A link rod end uses an unknown body kind.");
+    Require(EndInRange(rectangles, circles, rod.body_a) &&
+                EndInRange(rectangles, circles, rod.body_b),
+            "A link rod end references a body index out of range.");
+    Require(EndMass(rectangles, circles, rod.body_a) > 0.0f &&
+                EndMass(rectangles, circles, rod.body_b) > 0.0f,
+            "Link rod ends must reference dynamic bodies.");
+    Require(!SameBody(rod.body_a, rod.body_b),
+            "A link rod must connect two distinct bodies.");
+    Require(!IsPinnedRef(revolute_pins, rod.body_a) &&
+                !IsPinnedRef(revolute_pins, rod.body_b),
+            "A link rod end must not reference a pinned circle.");
+    Require(std::isfinite(rod.length) && rod.length > 0.0f,
+            "A link rod length must be finite and positive.");
+    Require(SegmentLength(EndPosition(rectangles, circles, rod.body_a),
+                          EndPosition(rectangles, circles, rod.body_b)) >=
+                kMinimumConstraintLength,
+            "Link rod ends must start away from each other.");
   }
 }
 
 void SolveConstraintVelocities(std::vector<Rectangle>& rectangles,
                                std::vector<Circle>& circles,
-                               const std::vector<RevolutePin>& revolute_pins,
-                               const std::vector<PulleyRope>& pulley_ropes,
+                               const ConstraintSet& constraints,
                                ConstraintImpulses* impulses) {
   for (int round = 0; round < kSolverIterations; ++round) {
-    for (std::size_t i = 0; i < revolute_pins.size(); ++i) {
-      Circle& circle =
-          circles[static_cast<std::size_t>(revolute_pins[i].circle_index)];
+    for (std::size_t i = 0; i < constraints.revolute_pins.size(); ++i) {
+      Circle& circle = circles[static_cast<std::size_t>(
+          constraints.revolute_pins[i].circle_index)];
       const Vec2 impulse = Multiply(circle.velocity, -circle.mass);
       circle.velocity = {};
       impulses->pin_impulses[i] = Add(impulses->pin_impulses[i], impulse);
     }
 
-    for (std::size_t i = 0; i < pulley_ropes.size(); ++i) {
-      const PulleyRope& rope = pulley_ropes[i];
+    for (std::size_t i = 0; i < constraints.pulley_ropes.size(); ++i) {
+      const PulleyRope& rope = constraints.pulley_ropes[i];
       Circle& pulley =
           circles[static_cast<std::size_t>(rope.pulley_circle_index)];
       const EndView end_a = GetEndView(rectangles, circles, rope.body_a);
@@ -220,19 +267,43 @@ void SolveConstraintVelocities(std::vector<Rectangle>& rectangles,
       impulses->rope_impulses[i].impulse_a += lambda_a;
       impulses->rope_impulses[i].impulse_b += lambda_b;
     }
+
+    for (std::size_t i = 0; i < constraints.anchor_rods.size(); ++i) {
+      const AnchorRod& rod = constraints.anchor_rods[i];
+      const EndView end = GetEndView(rectangles, circles, rod.body);
+      const Vec2 axis = Normalize(Subtract(*end.position, rod.world_anchor));
+      const float rate = Dot(axis, *end.velocity);
+      const float lambda = -rate / end.inverse_mass;
+      *end.velocity =
+          Add(*end.velocity, Multiply(axis, lambda * end.inverse_mass));
+      impulses->anchor_rod_impulses[i] += lambda;
+    }
+
+    for (std::size_t i = 0; i < constraints.link_rods.size(); ++i) {
+      const LinkRod& rod = constraints.link_rods[i];
+      const EndView end_a = GetEndView(rectangles, circles, rod.body_a);
+      const EndView end_b = GetEndView(rectangles, circles, rod.body_b);
+      const Vec2 axis = Normalize(Subtract(*end_a.position, *end_b.position));
+      const float rate = Dot(axis, Subtract(*end_a.velocity, *end_b.velocity));
+      const float lambda = -rate / (end_a.inverse_mass + end_b.inverse_mass);
+      *end_a.velocity =
+          Add(*end_a.velocity, Multiply(axis, lambda * end_a.inverse_mass));
+      *end_b.velocity = Subtract(*end_b.velocity,
+                                 Multiply(axis, lambda * end_b.inverse_mass));
+      impulses->link_rod_impulses[i] += lambda;
+    }
   }
 }
 
 void ProjectConstraintPositions(std::vector<Rectangle>& rectangles,
                                 std::vector<Circle>& circles,
-                                const std::vector<RevolutePin>& revolute_pins,
-                                const std::vector<PulleyRope>& pulley_ropes) {
-  for (const RevolutePin& pin : revolute_pins) {
+                                const ConstraintSet& constraints) {
+  for (const RevolutePin& pin : constraints.revolute_pins) {
     circles[static_cast<std::size_t>(pin.circle_index)].position =
         pin.world_anchor;
   }
 
-  for (const PulleyRope& rope : pulley_ropes) {
+  for (const PulleyRope& rope : constraints.pulley_ropes) {
     const EndView end_a = GetEndView(rectangles, circles, rope.body_a);
     const EndView end_b = GetEndView(rectangles, circles, rope.body_b);
     const double error = SegmentLength(*end_a.position, rope.anchor_a) +
@@ -253,6 +324,30 @@ void ProjectConstraintPositions(std::vector<Rectangle>& rectangles,
         Subtract(*end_a.position, Multiply(direction_a, correction_a));
     *end_b.position =
         Subtract(*end_b.position, Multiply(direction_b, correction_b));
+  }
+
+  for (const AnchorRod& rod : constraints.anchor_rods) {
+    const EndView end = GetEndView(rectangles, circles, rod.body);
+    const double error = SegmentLength(*end.position, rod.world_anchor) -
+                         static_cast<double>(rod.length);
+    const Vec2 axis = Normalize(Subtract(*end.position, rod.world_anchor));
+    *end.position =
+        Subtract(*end.position, Multiply(axis, static_cast<float>(error)));
+  }
+
+  for (const LinkRod& rod : constraints.link_rods) {
+    const EndView end_a = GetEndView(rectangles, circles, rod.body_a);
+    const EndView end_b = GetEndView(rectangles, circles, rod.body_b);
+    const double error = SegmentLength(*end_a.position, *end_b.position) -
+                         static_cast<double>(rod.length);
+    const float inverse_mass_sum = end_a.inverse_mass + end_b.inverse_mass;
+    const Vec2 axis = Normalize(Subtract(*end_a.position, *end_b.position));
+    const float correction_a =
+        static_cast<float>(error * (end_a.inverse_mass / inverse_mass_sum));
+    const float correction_b =
+        static_cast<float>(error * (end_b.inverse_mass / inverse_mass_sum));
+    *end_a.position = Subtract(*end_a.position, Multiply(axis, correction_a));
+    *end_b.position = Add(*end_b.position, Multiply(axis, correction_b));
   }
 }
 

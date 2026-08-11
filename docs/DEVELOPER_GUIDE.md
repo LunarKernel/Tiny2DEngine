@@ -1,6 +1,6 @@
 # Tiny2D Engine Developer Guide
 
-> Current experiment generation: V18 (unreleased) / Latest release: 2.0.0
+> Current experiment generation: V19 (unreleased) / Latest release: 2.0.0
 > (V10)<br>
 > C++17 · SDL2 · Dear ImGui · CMake + vcpkg
 
@@ -53,11 +53,12 @@ namespace `tiny2d::internal` with no stability guarantee:
   window-wall contacts. The solver templates accept any body type that
   exposes mass, pose, and velocity state, so rectangle-circle pairs resolve
   through the same code path as same-shape pairs.
-- `constraints.{h,cc}` — bilateral constraint resolution: revolute pins and
-  pulley-rope constraints. Validation, the per-round velocity solve (a
-  direct 2x2 block solve per rope, coupled to the pulley's angular
-  velocity), and the full position projection that keeps rope-length drift
-  from accumulating.
+- `constraints.{h,cc}` — bilateral constraint resolution: revolute pins,
+  pulley-rope constraints, and world-anchored and body-to-body rods,
+  composable through a `ConstraintSet`. Validation, the per-round velocity
+  solve (a direct 2x2 block solve per rope coupled to the pulley's angular
+  velocity; scalar axial solves per rod), and the full position projection
+  that keeps constraint-length drift from accumulating.
 
 ## 3. Engine semantics
 
@@ -93,16 +94,32 @@ namespace `tiny2d::internal` with no stability guarantee:
   anchor with rotation free; `PulleyRope` is a massless, inextensible,
   non-slipping rope from one body's center of mass over a pinned pulley to
   another body's center of mass, with fixed world anchor points where the
-  segments leave the pulley. Constraint velocity errors are removed by
-  impulses between force integration and position advancement (each rope is
-  an exact 2x2 block solve coupled to the pulley's angular velocity);
-  contact resolution runs unchanged; pin and rope position errors are then
-  fully projected out, so rope-length drift stays at float-rounding level.
-  Reported reactions: rope tensions (positive = taut) and the pin force,
+  segments leave the pulley; `AnchorRod` holds a dynamic body's center at
+  a fixed distance from a world anchor (free to swing); `LinkRod` holds
+  two dynamic bodies at a fixed distance. All constraint kinds compose
+  through a `ConstraintSet`. Constraint velocity errors are removed by
+  impulses between force integration and position advancement (each rope
+  is an exact 2x2 block solve coupled to the pulley's angular velocity;
+  rods are scalar axial solves, sequential over kSolverIterations rounds
+  for chains); contact resolution runs unchanged; constraint position
+  errors are then fully projected out, so length drift stays at
+  float-rounding level. Reported reactions: rope tensions (positive =
+  taut), signed rod axial forces (positive = tension), and the pin force,
   which excludes the rope wrap load because rope anchors are fixed world
   points — labs assemble the physical axle load as pulley weight plus both
-  tensions. The rope is bilateral (no slack modeling), and CCD cannot be
-  combined with constraints; both limits are validated, not silent.
+  tensions. The rope is bilateral (no slack modeling), rods attach at
+  centers of mass only, and CCD cannot be combined with constraints; these
+  limits are validated, not silent.
+- **Constraint energy limitation (measured):** velocity-projection
+  constraint stepping deletes the centripetally rotated axial velocity
+  component every step, losing kinetic energy at a rate scaling as
+  v^4 dt / L^2 under fast rotation (first order in dt; present even when
+  the solve is exact, so solver iterations cannot remove it). ChaosLab
+  therefore substeps 32x and binds its energy criteria in the 25-degree
+  regime; whip-heavy chaotic trajectories lose several percent of their
+  released energy per minute, bounded by a regression ceiling in the V19
+  suite. The recorded upgrade path is the roadmap's
+  energy-consistent-constraint-integration trigger.
 - **Continuous collision detection:** when `enable_circle_circle_ccd` is
   true, the step first integrates speculatively; if a circle pair that is
   separated at both endpoints would cross inside the step, the world is
@@ -158,6 +175,7 @@ and `sim_ui.h` (slider-plus-input widgets and arrow drawing).
 | V16 ContactLab | Circle impacts and rolling with per-body materials | Momentum/energy checks, rolling slip tolerance |
 | V17 ImpactLab | Discrete vs CCD lanes over one fixed step | Swept-circle entry/exit times, expected post-impact state, per-lane error terms |
 | V18 AtwoodLab | Two hanging blocks on a rope over a pinned massive pulley | a = (m_b - m_a) g / (m_a + m_b + I/R^2), tension pair, no-slip coupling, rope-length drift, energy budget |
+| V19 ChaosLab | Point-mass double pendulum on rod constraints with a shadow run | Small-angle normal modes (2%), 25-degree energy budget, rod drift, factor-1000 divergence from a 1e-4 rad offset |
 
 ## 6. Adding a lab
 

@@ -1845,6 +1845,346 @@ void TestConstrainedUpdateZeroDtReportsZeroReactions() {
   CHECK(reactions.rope_tensions[0].tension_b == 0.0f);
 }
 
+tiny2d::ConstraintSet MakeAtwoodConstraintSet(const AtwoodFixture& fixture) {
+  tiny2d::ConstraintSet constraints;
+  constraints.revolute_pins = fixture.pins;
+  constraints.pulley_ropes = fixture.ropes;
+  return constraints;
+}
+
+void TestConstraintSetOverloadMatchesPinsRopesOverload() {
+  // Wrapper-consistency gate: the V18 (pins, ropes) overload and the
+  // ConstraintSet overload must stay bit-identical.
+  AtwoodFixture legacy = MakeAtwoodFixture(1.0f, 1.2f);
+  AtwoodFixture through_set = MakeAtwoodFixture(1.0f, 1.2f);
+  const tiny2d::ConstraintSet constraints =
+      MakeAtwoodConstraintSet(through_set);
+  constexpr float kStep = 1.0f / 480.0f;
+  for (int step = 0; step < 300; ++step) {
+    StepAtwoodFixture(legacy, kStep, nullptr);
+    tiny2d::Update(through_set.rectangles, through_set.circles, constraints,
+                   kStep, 100.0f, 100.0f, 0.0f, 0.0f, {}, 9.81f, 0.0f, false,
+                   nullptr);
+    for (std::size_t i = 0; i < legacy.circles.size(); ++i) {
+      CHECK(SameCircle(legacy.circles[i], through_set.circles[i]));
+    }
+  }
+}
+
+// A single bob hanging from an anchor rod: released at two degrees, its
+// small-angle period is 2 pi sqrt(L / g).
+struct RodPendulumFixture {
+  std::vector<tiny2d::Rectangle> rectangles;
+  std::vector<tiny2d::Circle> circles;
+  tiny2d::ConstraintSet constraints;
+};
+
+RodPendulumFixture MakeRodPendulumFixture(float length,
+                                          float initial_angle_radians) {
+  RodPendulumFixture fixture;
+  fixture.circles.resize(1);
+  tiny2d::Circle& bob = fixture.circles[0];
+  bob.mass = 1.0f;
+  // Positive angles are clockwise on screen: from hanging, toward -X.
+  bob.position = {50.0f - length * std::sin(initial_angle_radians),
+                  50.0f + length * std::cos(initial_angle_radians)};
+  bob.radius = 0.05f;
+  bob.fixed_rotation = true;
+  bob.angular_damping_rate = 0.0f;
+  tiny2d::AnchorRod rod;
+  rod.body = {tiny2d::BodyKind::kCircle, 0};
+  rod.world_anchor = {50.0f, 50.0f};
+  rod.length = length;
+  fixture.constraints.anchor_rods = {rod};
+  return fixture;
+}
+
+void StepConstraintSet(RodPendulumFixture& fixture, float delta_time,
+                       tiny2d::ConstraintReactions* reactions) {
+  tiny2d::Update(fixture.rectangles, fixture.circles, fixture.constraints,
+                 delta_time, 100.0f, 100.0f, 0.0f, 0.0f, {}, 9.81f, 0.0f, false,
+                 reactions);
+}
+
+void TestAnchorRodPendulumMatchesAnalyticalPeriod() {
+  constexpr float kLength = 2.0f;
+  constexpr float kInitialAngle = 0.0349066f;  // 2 degrees.
+  RodPendulumFixture fixture = MakeRodPendulumFixture(kLength, kInitialAngle);
+  tiny2d::ConstraintReactions reactions;
+  constexpr float kStep = 1.0f / 480.0f;
+  const double expected_period = 2.0 * 3.14159265358979 * std::sqrt(2.0 / 9.81);
+
+  const auto angle = [&]() {
+    const double offset_x = fixture.circles[0].position.x - 50.0;
+    const double offset_y = fixture.circles[0].position.y - 50.0;
+    return std::atan2(-offset_x, offset_y);
+  };
+
+  double previous_angle = angle();
+  double previous_time = 0.0;
+  std::array<double, 3> crossings{};
+  std::size_t crossing_count = 0;
+  bool checked_bottom_force = false;
+  for (int step = 1; step <= 4000 && crossing_count < crossings.size();
+       ++step) {
+    StepConstraintSet(fixture, kStep, &reactions);
+    const double time = static_cast<double>(step) * kStep;
+    const double current_angle = angle();
+    if (previous_angle > 0.0 && current_angle <= 0.0) {
+      const double fraction = previous_angle / (previous_angle - current_angle);
+      crossings[crossing_count++] = previous_time + fraction * kStep;
+      if (!checked_bottom_force) {
+        // At the bottom the rod carries the weight plus the tiny
+        // centripetal term, so the reported force is m g within 1%.
+        CHECK(reactions.anchor_rod_forces.size() == 1);
+        CHECK(NearlyEqual(reactions.anchor_rod_forces[0], 9.81f, 0.01f));
+        checked_bottom_force = true;
+      }
+    }
+    previous_angle = current_angle;
+    previous_time = time;
+  }
+  CHECK(crossing_count == crossings.size());
+  const double measured_period = crossings[2] - crossings[0];
+  CHECK(std::abs(measured_period - 2.0 * expected_period) /
+            (2.0 * expected_period) <=
+        0.01);
+}
+
+void TestLinkRodKeepsDistanceAndReportsCompression() {
+  const auto make_pair_fixture = [](tiny2d::Vec2 velocity_a,
+                                    tiny2d::Vec2 velocity_b) {
+    RodPendulumFixture fixture;
+    fixture.circles.resize(2);
+    fixture.circles[0].mass = 1.0f;
+    fixture.circles[0].position = {48.0f, 50.0f};
+    fixture.circles[0].velocity = velocity_a;
+    fixture.circles[0].radius = 0.05f;
+    fixture.circles[0].angular_damping_rate = 0.0f;
+    fixture.circles[1] = fixture.circles[0];
+    fixture.circles[1].position = {52.0f, 50.0f};
+    fixture.circles[1].velocity = velocity_b;
+    tiny2d::LinkRod rod;
+    rod.body_a = {tiny2d::BodyKind::kCircle, 0};
+    rod.body_b = {tiny2d::BodyKind::kCircle, 1};
+    rod.length = 4.0f;
+    fixture.constraints.link_rods = {rod};
+    return fixture;
+  };
+  const auto step_zero_gravity = [](RodPendulumFixture& fixture,
+                                    tiny2d::ConstraintReactions* reactions) {
+    tiny2d::Update(fixture.rectangles, fixture.circles, fixture.constraints,
+                   1.0f / 480.0f, 100.0f, 100.0f, 0.0f, 0.0f, {}, 0.0f, 0.0f,
+                   false, reactions);
+  };
+
+  // Approaching ends put the rod in compression (negative axial force) and
+  // momentum conservation stops both bodies.
+  RodPendulumFixture approaching =
+      make_pair_fixture({1.0f, 0.0f}, {-1.0f, 0.0f});
+  tiny2d::ConstraintReactions reactions;
+  step_zero_gravity(approaching, &reactions);
+  CHECK(reactions.link_rod_forces.size() == 1);
+  CHECK(reactions.link_rod_forces[0] < 0.0f);
+  CHECK(NearlyEqual(approaching.circles[0].velocity.x, 0.0f, 0.0001f));
+  CHECK(NearlyEqual(approaching.circles[1].velocity.x, 0.0f, 0.0001f));
+
+  // Separating ends put the rod in tension.
+  RodPendulumFixture separating =
+      make_pair_fixture({-1.0f, 0.0f}, {1.0f, 0.0f});
+  step_zero_gravity(separating, &reactions);
+  CHECK(reactions.link_rod_forces[0] > 0.0f);
+
+  // A spinning pair keeps its distance for 60 s.
+  RodPendulumFixture spinning = make_pair_fixture({0.0f, 1.0f}, {0.0f, -1.0f});
+  for (int step = 0; step < 60 * 480; ++step) {
+    step_zero_gravity(spinning, nullptr);
+  }
+  const double distance =
+      std::hypot(static_cast<double>(spinning.circles[0].position.x) -
+                     spinning.circles[1].position.x,
+                 static_cast<double>(spinning.circles[0].position.y) -
+                     spinning.circles[1].position.y);
+  CHECK(std::abs(distance - 4.0) < 0.0001);
+  CHECK(IsFinite(spinning.circles[0]));
+  CHECK(IsFinite(spinning.circles[1]));
+}
+
+void TestAnchorRodWithFloorContactStaysFinite() {
+  // The hanging bob overlaps the area floor, so the rod and the window
+  // contact fight over it while it slides; the step must stay finite and
+  // deterministic for 60 s.
+  const auto make_fixture = []() {
+    RodPendulumFixture fixture;
+    fixture.circles.resize(1);
+    tiny2d::Circle& bob = fixture.circles[0];
+    bob.mass = 1.0f;
+    bob.position = {50.0f, 99.7f};
+    bob.velocity = {2.0f, 0.0f};
+    bob.radius = 0.5f;
+    bob.angular_damping_rate = 0.0f;
+    tiny2d::AnchorRod rod;
+    rod.body = {tiny2d::BodyKind::kCircle, 0};
+    rod.world_anchor = {50.0f, 95.2f};
+    rod.length = 4.5f;
+    fixture.constraints.anchor_rods = {rod};
+    return fixture;
+  };
+  RodPendulumFixture first = make_fixture();
+  RodPendulumFixture second = make_fixture();
+  for (int step = 0; step < 60 * 480; ++step) {
+    StepConstraintSet(first, 1.0f / 480.0f, nullptr);
+    StepConstraintSet(second, 1.0f / 480.0f, nullptr);
+    CHECK(IsFinite(first.circles[0]));
+  }
+  CHECK(SameCircle(first.circles[0], second.circles[0]));
+}
+
+void TestRodAndRopeShareBodyStaysFiniteAndDeterministic() {
+  // An anchor rod fixes the Atwood fixture's side-a segment length, which
+  // together with the rope locks the whole machine: the mixed
+  // pin/rope/rod interleaving must settle statically, stay finite, and be
+  // bitwise deterministic.
+  const auto make_fixture = []() {
+    AtwoodFixture fixture = MakeAtwoodFixture(1.0f, 1.2f);
+    tiny2d::AnchorRod rod;
+    rod.body = {tiny2d::BodyKind::kCircle, 1};
+    rod.world_anchor = {49.9f, 20.0f};
+    rod.length = 2.0f;
+    return std::make_pair(fixture, rod);
+  };
+  auto [first, first_rod] = make_fixture();
+  auto [second, second_rod] = make_fixture();
+  tiny2d::ConstraintSet first_constraints = MakeAtwoodConstraintSet(first);
+  first_constraints.anchor_rods = {first_rod};
+  tiny2d::ConstraintSet second_constraints = MakeAtwoodConstraintSet(second);
+  second_constraints.anchor_rods = {second_rod};
+
+  for (int step = 0; step < 60 * 480; ++step) {
+    tiny2d::Update(first.rectangles, first.circles, first_constraints,
+                   1.0f / 480.0f, 100.0f, 100.0f, 0.0f, 0.0f, {}, 9.81f, 0.0f,
+                   false, nullptr);
+    tiny2d::Update(second.rectangles, second.circles, second_constraints,
+                   1.0f / 480.0f, 100.0f, 100.0f, 0.0f, 0.0f, {}, 9.81f, 0.0f,
+                   false, nullptr);
+    for (const tiny2d::Circle& circle : first.circles) {
+      CHECK(IsFinite(circle));
+    }
+  }
+  for (std::size_t i = 0; i < first.circles.size(); ++i) {
+    CHECK(SameCircle(first.circles[i], second.circles[i]));
+  }
+  // The rod holds side a at its initial hang.
+  CHECK(std::abs(first.circles[1].position.y - 22.0f) < 0.001f);
+}
+
+void TestConstrainedUpdateRejectsInvalidRods() {
+  const auto make_reference = []() {
+    RodPendulumFixture fixture;
+    fixture.circles.resize(2);
+    fixture.circles[0].mass = 1.0f;
+    fixture.circles[0].position = {50.0f, 52.0f};
+    fixture.circles[0].radius = 0.05f;
+    fixture.circles[0].angular_damping_rate = 0.0f;
+    fixture.circles[1] = fixture.circles[0];
+    fixture.circles[1].position = {50.0f, 54.0f};
+    tiny2d::AnchorRod anchor_rod;
+    anchor_rod.body = {tiny2d::BodyKind::kCircle, 0};
+    anchor_rod.world_anchor = {50.0f, 50.0f};
+    anchor_rod.length = 2.0f;
+    fixture.constraints.anchor_rods = {anchor_rod};
+    tiny2d::LinkRod link_rod;
+    link_rod.body_a = {tiny2d::BodyKind::kCircle, 0};
+    link_rod.body_b = {tiny2d::BodyKind::kCircle, 1};
+    link_rod.length = 2.0f;
+    fixture.constraints.link_rods = {link_rod};
+    return fixture;
+  };
+
+  const auto expect_reject = [&](auto mutate) {
+    RodPendulumFixture fixture = make_reference();
+    mutate(fixture);
+    const std::vector<tiny2d::Circle> circles_before = fixture.circles;
+    tiny2d::ConstraintReactions reactions;
+    reactions.anchor_rod_forces = {123.0f};
+    bool threw = false;
+    try {
+      StepConstraintSet(fixture, 1.0f / 480.0f, &reactions);
+    } catch (const std::invalid_argument&) {
+      threw = true;
+    }
+    CHECK(threw);
+    for (std::size_t i = 0; i < circles_before.size(); ++i) {
+      CHECK(SameCircle(fixture.circles[i], circles_before[i]));
+    }
+    CHECK(reactions.anchor_rod_forces.size() == 1);
+    CHECK(reactions.anchor_rod_forces[0] == 123.0f);
+  };
+
+  expect_reject([](RodPendulumFixture& f) {
+    // Deliberately out-of-enumerator input for the rejection path; the
+    // cast is well-defined for a scoped enum with int underlying type.
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+    f.constraints.anchor_rods[0].body.kind = static_cast<tiny2d::BodyKind>(2);
+  });
+  expect_reject([](RodPendulumFixture& f) {
+    f.constraints.anchor_rods[0].body.index = -1;
+  });
+  expect_reject([](RodPendulumFixture& f) {
+    f.constraints.anchor_rods[0].body.index = 9;
+  });
+  expect_reject([](RodPendulumFixture& f) { f.circles[0].mass = 0.0f; });
+  expect_reject([](RodPendulumFixture& f) {
+    // A pinned circle already has both linear degrees of freedom removed.
+    f.constraints.revolute_pins = {{0, {50.0f, 52.0f}}};
+  });
+  expect_reject([](RodPendulumFixture& f) {
+    f.constraints.anchor_rods[0].world_anchor.y =
+        std::numeric_limits<float>::quiet_NaN();
+  });
+  expect_reject([](RodPendulumFixture& f) {
+    f.constraints.anchor_rods[0].length = 0.0f;
+  });
+  expect_reject([](RodPendulumFixture& f) {
+    f.constraints.anchor_rods[0].length = -1.0f;
+  });
+  expect_reject([](RodPendulumFixture& f) {
+    f.circles[0].position = f.constraints.anchor_rods[0].world_anchor;
+  });
+  expect_reject([](RodPendulumFixture& f) {
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+    f.constraints.link_rods[0].body_b.kind = static_cast<tiny2d::BodyKind>(2);
+  });
+  expect_reject([](RodPendulumFixture& f) {
+    f.constraints.link_rods[0].body_b.index = 9;
+  });
+  expect_reject([](RodPendulumFixture& f) { f.circles[1].mass = 0.0f; });
+  expect_reject([](RodPendulumFixture& f) {
+    f.constraints.link_rods[0].body_b = f.constraints.link_rods[0].body_a;
+  });
+  expect_reject([](RodPendulumFixture& f) {
+    f.constraints.revolute_pins = {{1, {50.0f, 54.0f}}};
+  });
+  expect_reject([](RodPendulumFixture& f) {
+    f.constraints.link_rods[0].length = std::numeric_limits<float>::infinity();
+  });
+  expect_reject([](RodPendulumFixture& f) {
+    f.circles[1].position = f.circles[0].position;
+  });
+}
+
+void TestConstraintSetZeroDtReportsZeroRodForces() {
+  RodPendulumFixture fixture = MakeRodPendulumFixture(2.0f, 0.0f);
+  // A radial velocity violates the rod; zero dt still resolves it.
+  fixture.circles[0].velocity = {0.0f, 1.0f};
+  tiny2d::ConstraintReactions reactions;
+  StepConstraintSet(fixture, 0.0f, &reactions);
+  CHECK(std::abs(fixture.circles[0].velocity.y) <= 0.0001f);
+  CHECK(reactions.anchor_rod_forces.size() == 1);
+  CHECK(reactions.link_rod_forces.empty());
+  CHECK(reactions.anchor_rod_forces[0] == 0.0f);
+}
+
 }  // namespace
 
 int main() {
@@ -1902,5 +2242,12 @@ int main() {
   TestPulleyRopeWithFloorContactStaysFinite();
   TestConstrainedUpdateRejectsInvalidInput();
   TestConstrainedUpdateZeroDtReportsZeroReactions();
+  TestConstraintSetOverloadMatchesPinsRopesOverload();
+  TestAnchorRodPendulumMatchesAnalyticalPeriod();
+  TestLinkRodKeepsDistanceAndReportsCompression();
+  TestAnchorRodWithFloorContactStaysFinite();
+  TestRodAndRopeShareBodyStaysFiniteAndDeterministic();
+  TestConstrainedUpdateRejectsInvalidRods();
+  TestConstraintSetZeroDtReportsZeroRodForces();
   return 0;
 }

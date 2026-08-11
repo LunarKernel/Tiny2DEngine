@@ -20,7 +20,12 @@ struct LabInfo {
   SimulationResult (*run)(SDL_Renderer* renderer);
 };
 
-inline constexpr std::array<LabInfo, 8> kLabs = {{
+inline constexpr std::array<LabInfo, 9> kLabs = {{
+    {"V19 ChaosLab: Double Pendulum",
+     "Two point-mass bobs on rigid rod constraints with normal-mode "
+     "anchors, energy telemetry, and a shadow run that makes chaotic "
+     "divergence visible.",
+     "Open V19 ChaosLab", &RunChaosLabSimulation},
     {"V18 AtwoodLab: Massive Pulley and Rope",
      "Two hanging masses on an inextensible, non-slipping rope over a "
      "pinned pulley with real rotational inertia, tension telemetry, and "

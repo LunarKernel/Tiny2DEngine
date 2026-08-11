@@ -232,6 +232,40 @@ struct PulleyRope {
   float segment_length_sum{};
 };
 
+// Rigid massless rod holding a dynamic body's center of mass at a fixed
+// distance from a world anchor. Unlike RevolutePin, the body stays free to
+// swing: only the radial degree of freedom is removed. The rod is bilateral
+// (it carries tension and compression). world_anchor uses world length
+// units; length must be positive. The length is a target: a value
+// inconsistent with the initial body position produces a one-step
+// projection toward it, not an error.
+struct AnchorRod {
+  BodyRef body{};
+  Vec2 world_anchor{};
+  float length{};
+};
+
+// Rigid massless rod holding two dynamic bodies' centers of mass at a
+// fixed distance. Bilateral and COM-attached like AnchorRod, with the same
+// target semantics for length. The bodies must be distinct and neither may
+// be a pinned circle.
+struct LinkRod {
+  BodyRef body_a{};
+  BodyRef body_b{};
+  float length{};
+};
+
+// All constraint kinds for one step. The (pins, ropes) Update overload
+// below forwards here with empty rod vectors, so there stays exactly one
+// step path; TestConstraintSetOverloadMatchesPinsRopesOverload keeps the
+// wrapper bitwise.
+struct ConstraintSet {
+  std::vector<RevolutePin> revolute_pins;
+  std::vector<PulleyRope> pulley_ropes;
+  std::vector<AnchorRod> anchor_rods;
+  std::vector<LinkRod> link_rods;
+};
+
 // Per-rope constraint force report in force units. Positive tension means a
 // taut rope pulling that body toward its anchor. Both values are zero when
 // delta_time is zero.
@@ -245,38 +279,61 @@ struct RopeReaction {
 // reports only the pin impulse: rope anchors are fixed world points, so the
 // rope wrap load never couples to the pulley's linear degree of freedom and
 // is not included; a physical axle load is assembled by the caller as
-// pulley weight plus both tensions. Zero when delta_time is zero.
+// pulley weight plus both tensions. anchor_rod_forces and link_rod_forces
+// hold each rod's signed axial force: positive is tension (the rod pulls
+// its endpoints toward each other or toward the anchor), negative is
+// compression; a hanging pendulum bob reports approximately its weight as
+// positive anchor-rod force. Every reported value is zero when delta_time
+// is zero.
 struct ConstraintReactions {
   std::vector<Vec2> pin_forces;
   std::vector<RopeReaction> rope_tensions;
+  std::vector<float> anchor_rod_forces;
+  std::vector<float> link_rod_forces;
 };
 
-// Advances the mixed world under bilateral constraints. This is the single
-// step path: the mixed overload above forwards here with empty constraint
-// vectors, preserving its documented behavior bit for bit. Constraint
-// velocity errors are removed by impulses after force integration and
-// damping but before positions advance; contact resolution runs unchanged;
-// pin and rope position errors are then fully projected out, so rope-length
-// drift does not accumulate. A contact impulse applied after the constraint
-// solve can violate a constraint velocity within one step; the next step's
-// solve removes it.
-//
-// Validation extends the mixed overload's rules: pin and rope indices must
-// be in range and reference dynamic bodies, pins must be unique per circle,
-// rope ends must be distinct unpinned bodies, the rope pulley must be
-// pinned and rotationally free, anchors must be finite (pin anchors must fit
-// the area as documented on RevolutePin), segment_length_sum must be finite
-// and positive, and every rope end must start at least 1e-6 length units
-// from its anchor so the segment direction is well defined.
-// enable_circle_circle_ccd must be false whenever any constraint is present.
-// Invalid input throws std::invalid_argument before any state (including
-// *reactions) is modified. When reactions is non-null, a successful call
-// resizes its vectors to match the constraint counts and fills them; a
-// zero delta_time reports zero reactions while still resolving constraint
-// velocities and positions.
+// Advances the mixed world under pin and rope constraints. Forwards to the
+// ConstraintSet overload below with empty rod vectors, preserving the V18
+// behavior bit for bit (TestConstraintSetOverloadMatchesPinsRopesOverload).
 void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
             const std::vector<RevolutePin>& revolute_pins,
             const std::vector<PulleyRope>& pulley_ropes, float delta_time,
+            float area_width, float area_height, float restitution,
+            float friction = 0.4f, Vec2 electric_field = {},
+            float gravity = 98.1f, float restitution_velocity_threshold = 20.0f,
+            bool enable_circle_circle_ccd = false,
+            ConstraintReactions* reactions = nullptr);
+
+// Advances the mixed world under the full constraint set. This is the
+// single step path: the mixed overload forwards here with an empty set and
+// the (pins, ropes) overload with empty rod vectors. Constraint velocity
+// errors are removed by impulses after force integration and damping but
+// before positions advance (per round: pins, ropes, anchor rods, link
+// rods); contact resolution runs unchanged; constraint position errors are
+// then fully projected out in the same order, so length drift does not
+// accumulate. A contact impulse applied after the constraint solve can
+// violate a constraint velocity within one step; the next step's solve
+// removes it. Sequential solves are exact for independent constraints and
+// converge geometrically for chains; extreme mass ratios across a shared
+// body converge slowly and are a documented limitation.
+//
+// Validation extends the mixed overload's rules. Pins: indices in range,
+// dynamic circles, unique per circle, finite anchors that keep the circle
+// inside the area. Ropes: distinct dynamic unpinned ends, a pinned and
+// rotationally free pulley, finite anchors, positive finite
+// segment_length_sum, and both ends at least 1e-6 length units from their
+// anchors. Rods: body refs of a known kind, in range, dynamic, and not
+// pinned circles; LinkRod ends distinct; finite anchors; finite positive
+// lengths; and at least 1e-6 length units between the endpoints so the
+// axis is well defined. Rods may share bodies with each other and with
+// rope ends (chains). enable_circle_circle_ccd must be false whenever any
+// constraint is present. Invalid input throws std::invalid_argument before
+// any state (including *reactions) is modified. When reactions is
+// non-null, a successful call resizes its vectors to match the constraint
+// counts and fills them; a zero delta_time reports zero reactions while
+// still resolving constraint velocities and positions.
+void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
+            const ConstraintSet& constraints, float delta_time,
             float area_width, float area_height, float restitution,
             float friction = 0.4f, Vec2 electric_field = {},
             float gravity = 98.1f, float restitution_velocity_threshold = 20.0f,

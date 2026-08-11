@@ -64,6 +64,7 @@ tiny2d_enable_warnings(Tiny2DEngine)
 if(TINY2D_BUILD_SANDBOX OR BUILD_TESTING)
   add_library(Tiny2DSimulationModels STATIC
       Sandbox/atwood_lab_model.cc
+      Sandbox/chaos_lab_model.cc
       Sandbox/contact_lab_model.cc
       Sandbox/force_lab_model.cc
       Sandbox/impact_lab_model.cc
@@ -85,6 +86,7 @@ endif()
 if(TINY2D_BUILD_SANDBOX)
   add_executable(Sandbox WIN32
       Sandbox/atwood_lab_simulation.cc
+      Sandbox/chaos_lab_simulation.cc
       Sandbox/contact_lab_simulation.cc
       Sandbox/force_lab_simulation.cc
       Sandbox/impact_lab_simulation.cc
@@ -214,4 +216,18 @@ if(BUILD_TESTING)
 
   add_test(NAME Tiny2DAtwoodLabTests COMMAND Tiny2DAtwoodLabTests)
   set_tests_properties(Tiny2DAtwoodLabTests PROPERTIES TIMEOUT 30)
+
+  add_executable(Tiny2DChaosLabTests
+      Sandbox/chaos_lab_test.cc
+  )
+
+  target_link_libraries(Tiny2DChaosLabTests PRIVATE Tiny2DSimulationModels
+                                                    Tiny2DTestSupport)
+  tiny2d_enable_warnings(Tiny2DChaosLabTests)
+
+  add_test(NAME Tiny2DChaosLabTests COMMAND Tiny2DChaosLabTests)
+  # The chaos suite advances 32 engine substeps per public step for two
+  # runs (53 s measured in Debug), so it needs far more headroom than the
+  # other suites, especially under AddressSanitizer.
+  set_tests_properties(Tiny2DChaosLabTests PROPERTIES TIMEOUT 180)
 endif()

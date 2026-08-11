@@ -234,9 +234,27 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
          restitution_velocity_threshold, enable_circle_circle_ccd, nullptr);
 }
 
+// The (pins, ropes) overload forwards to the full ConstraintSet step with
+// empty rod vectors, so every constrained caller shares one path.
+// Equivalence is protected by
+// TestConstraintSetOverloadMatchesPinsRopesOverload.
 void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
             const std::vector<RevolutePin>& revolute_pins,
             const std::vector<PulleyRope>& pulley_ropes, float delta_time,
+            float area_width, float area_height, float restitution,
+            float friction, Vec2 electric_field, float gravity,
+            float restitution_velocity_threshold, bool enable_circle_circle_ccd,
+            ConstraintReactions* reactions) {
+  ConstraintSet constraints;
+  constraints.revolute_pins = revolute_pins;
+  constraints.pulley_ropes = pulley_ropes;
+  Update(rectangles, circles, constraints, delta_time, area_width, area_height,
+         restitution, friction, electric_field, gravity,
+         restitution_velocity_threshold, enable_circle_circle_ccd, reactions);
+}
+
+void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
+            const ConstraintSet& constraints, float delta_time,
             float area_width, float area_height, float restitution,
             float friction, Vec2 electric_field, float gravity,
             float restitution_velocity_threshold, bool enable_circle_circle_ccd,
@@ -256,11 +274,13 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
   Require(std::isfinite(restitution_velocity_threshold) &&
               restitution_velocity_threshold >= 0.0f,
           "Restitution velocity threshold must be finite and non-negative.");
-  const bool has_constraints = !revolute_pins.empty() || !pulley_ropes.empty();
+  const bool has_constraints =
+      !constraints.revolute_pins.empty() || !constraints.pulley_ropes.empty() ||
+      !constraints.anchor_rods.empty() || !constraints.link_rods.empty();
   Require(!enable_circle_circle_ccd || !has_constraints,
           "Circle-circle CCD cannot be combined with constraints.");
-  ValidateConstraints(rectangles, circles, revolute_pins, pulley_ropes,
-                      area_width, area_height);
+  ValidateConstraints(rectangles, circles, constraints, area_width,
+                      area_height);
 
   const auto validate_integration = [&](const auto& body) {
     if (body.mass == 0.0f) {
@@ -474,8 +494,11 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
 
   ConstraintImpulses constraint_impulses;
   if (has_constraints) {
-    constraint_impulses.pin_impulses.resize(revolute_pins.size());
-    constraint_impulses.rope_impulses.resize(pulley_ropes.size());
+    constraint_impulses.pin_impulses.resize(constraints.revolute_pins.size());
+    constraint_impulses.rope_impulses.resize(constraints.pulley_ropes.size());
+    constraint_impulses.anchor_rod_impulses.resize(
+        constraints.anchor_rods.size());
+    constraint_impulses.link_rod_impulses.resize(constraints.link_rods.size());
   }
 
   if (!use_circle_circle_ccd) {
@@ -486,8 +509,8 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
       integrate_velocity(circle);
     }
     if (has_constraints) {
-      SolveConstraintVelocities(rectangles, circles, revolute_pins,
-                                pulley_ropes, &constraint_impulses);
+      SolveConstraintVelocities(rectangles, circles, constraints,
+                                &constraint_impulses);
     }
     for (Rectangle& rectangle : rectangles) {
       integrate_position(rectangle);
@@ -550,24 +573,34 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
   }
 
   if (has_constraints) {
-    ProjectConstraintPositions(rectangles, circles, revolute_pins,
-                               pulley_ropes);
+    ProjectConstraintPositions(rectangles, circles, constraints);
   }
   if (reactions != nullptr) {
-    reactions->pin_forces.assign(revolute_pins.size(), Vec2{});
-    reactions->rope_tensions.assign(pulley_ropes.size(), RopeReaction{});
+    reactions->pin_forces.assign(constraints.revolute_pins.size(), Vec2{});
+    reactions->rope_tensions.assign(constraints.pulley_ropes.size(),
+                                    RopeReaction{});
+    reactions->anchor_rod_forces.assign(constraints.anchor_rods.size(), 0.0f);
+    reactions->link_rod_forces.assign(constraints.link_rods.size(), 0.0f);
     if (delta_time > 0.0f) {
       const float inverse_delta_time = 1.0f / delta_time;
-      for (std::size_t i = 0; i < revolute_pins.size(); ++i) {
+      for (std::size_t i = 0; i < constraints.revolute_pins.size(); ++i) {
         reactions->pin_forces[i] =
             Multiply(constraint_impulses.pin_impulses[i], inverse_delta_time);
       }
-      for (std::size_t i = 0; i < pulley_ropes.size(); ++i) {
+      for (std::size_t i = 0; i < constraints.pulley_ropes.size(); ++i) {
         reactions->rope_tensions[i] = {
             -constraint_impulses.rope_impulses[i].impulse_a *
                 inverse_delta_time,
             -constraint_impulses.rope_impulses[i].impulse_b *
                 inverse_delta_time};
+      }
+      for (std::size_t i = 0; i < constraints.anchor_rods.size(); ++i) {
+        reactions->anchor_rod_forces[i] =
+            -constraint_impulses.anchor_rod_impulses[i] * inverse_delta_time;
+      }
+      for (std::size_t i = 0; i < constraints.link_rods.size(); ++i) {
+        reactions->link_rod_forces[i] =
+            -constraint_impulses.link_rod_impulses[i] * inverse_delta_time;
       }
     }
   }

@@ -8,6 +8,21 @@ not product versions.
 
 ### Added
 
+- V19 ChaosLab: a point-mass double pendulum on rod constraints with
+  small-angle normal-mode anchors, conservative and damped energy budgets
+  in the 25-degree regime, rod-drift and determinism guarantees, and a
+  built-in shadow run whose separation telemetry makes chaotic divergence
+  visible.
+- Engine rod constraints: `AnchorRod` (a dynamic body held at a fixed
+  distance from a world anchor, free to swing) and `LinkRod` (two dynamic
+  bodies at a fixed distance), bilateral and COM-attached, with signed
+  axial-force telemetry, composable with pins and ropes through the new
+  `ConstraintSet` Update overload.
+- A documented, quantified engine limitation: velocity-projection
+  constraint stepping loses mechanical energy at a rate scaling as
+  v^4 dt / L^2 under fast rotation; the ChaosLab substeps 32x and binds
+  its energy criteria at 25 degrees, and an energy-consistent-integration
+  trigger row was added to the roadmap's deferred-work table.
 - V18 AtwoodLab: two hanging blocks on a massless, inextensible,
   non-slipping rope over a pinned pulley with real rotational inertia,
   validated against the analytical Atwood acceleration, tension pair,
@@ -35,6 +50,9 @@ not product versions.
 
 ### Changed
 
+- The constrained `Update` overload taking pin and rope vectors now
+  forwards to the new `ConstraintSet` overload with empty rod vectors, so
+  all four public `Update` entry points share one step path.
 - All three public `Update` overloads now share one step path: the mixed
   overload forwards to the constrained overload with empty constraint
   sets. The integration loop was split into velocity and position phases
