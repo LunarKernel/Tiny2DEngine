@@ -65,10 +65,10 @@ void ResolveWallContactImpulses(Body& body, Vec2 inward_normal, Vec2 radius,
   }
 }
 
-void ResolveWallContact(Rectangle& square, Vec2 inward_normal, float offset,
-                        const ResolvedMaterial& material,
-                        bool allow_restitution,
-                        float restitution_velocity_threshold) {
+void ResolveWallContactVelocity(Rectangle& square, Vec2 inward_normal,
+                                float offset, const ResolvedMaterial& material,
+                                bool allow_restitution,
+                                float restitution_velocity_threshold) {
   const std::array<Vec2, 4> vertices = GetVerticesUnchecked(square);
   const Projection projection = Project(vertices, inward_normal);
   if (projection.minimum >= offset) {
@@ -91,15 +91,12 @@ void ResolveWallContact(Rectangle& square, Vec2 inward_normal, float offset,
   const Vec2 radius = Subtract(contact_point, square.position);
   ResolveWallContactImpulses(square, inward_normal, radius, material,
                              allow_restitution, restitution_velocity_threshold);
-
-  square.position = Add(square.position,
-                        Multiply(inward_normal, offset - projection.minimum));
 }
 
-void ResolveWallContact(Circle& circle, Vec2 inward_normal, float offset,
-                        const ResolvedMaterial& material,
-                        bool allow_restitution,
-                        float restitution_velocity_threshold) {
+void ResolveWallContactVelocity(Circle& circle, Vec2 inward_normal,
+                                float offset, const ResolvedMaterial& material,
+                                bool allow_restitution,
+                                float restitution_velocity_threshold) {
   const float minimum_projection =
       Dot(circle.position, inward_normal) - circle.radius;
   if (minimum_projection >= offset || InverseMass(circle) == 0.0f) {
@@ -109,9 +106,61 @@ void ResolveWallContact(Circle& circle, Vec2 inward_normal, float offset,
   const Vec2 radius = Multiply(inward_normal, -circle.radius);
   ResolveWallContactImpulses(circle, inward_normal, radius, material,
                              allow_restitution, restitution_velocity_threshold);
+}
 
+void ResolveWallContactSnap(Rectangle& square, Vec2 inward_normal,
+                            float offset) {
+  const std::array<Vec2, 4> vertices = GetVerticesUnchecked(square);
+  const Projection projection = Project(vertices, inward_normal);
+  if (projection.minimum >= offset || InverseMass(square) == 0.0f) {
+    return;
+  }
+  square.position = Add(square.position,
+                        Multiply(inward_normal, offset - projection.minimum));
+}
+
+void ResolveWallContactSnap(Circle& circle, Vec2 inward_normal, float offset) {
+  const float minimum_projection =
+      Dot(circle.position, inward_normal) - circle.radius;
+  if (minimum_projection >= offset || InverseMass(circle) == 0.0f) {
+    return;
+  }
   circle.position = Add(circle.position,
                         Multiply(inward_normal, offset - minimum_projection));
+}
+
+// One wall: the velocity half then the snap half, preserving the original
+// combined operation order (impulses never move positions, so the snap
+// half's re-derived projection equals the value the fused code reused).
+template <typename Body>
+void ResolveWallContact(Body& body, Vec2 inward_normal, float offset,
+                        const ResolvedMaterial& material,
+                        bool allow_restitution,
+                        float restitution_velocity_threshold) {
+  ResolveWallContactVelocity(body, inward_normal, offset, material,
+                             allow_restitution, restitution_velocity_threshold);
+  ResolveWallContactSnap(body, inward_normal, offset);
+}
+
+template <typename Body>
+void ForEachWall(Body& body, float area_width, float area_height,
+                 const ResolvedMaterial& material, bool allow_restitution,
+                 float restitution_velocity_threshold, bool velocity_only) {
+  const std::array<std::pair<Vec2, float>, 4> walls = {
+      {{{1.0f, 0.0f}, 0.0f},
+       {{-1.0f, 0.0f}, -area_width},
+       {{0.0f, 1.0f}, 0.0f},
+       {{0.0f, -1.0f}, -area_height}}};
+  for (const auto& [normal, offset] : walls) {
+    if (velocity_only) {
+      ResolveWallContactVelocity(body, normal, offset, material,
+                                 allow_restitution,
+                                 restitution_velocity_threshold);
+    } else {
+      ResolveWallContact(body, normal, offset, material, allow_restitution,
+                         restitution_velocity_threshold);
+    }
+  }
 }
 
 }  // namespace
@@ -157,14 +206,8 @@ void ResolveWindowCollision(Rectangle& square, float area_width,
                             float restitution_velocity_threshold) {
   const ResolvedMaterial material =
       MixWithWorld(square.material, restitution, friction);
-  ResolveWallContact(square, {1.0f, 0.0f}, 0.0f, material, allow_restitution,
-                     restitution_velocity_threshold);
-  ResolveWallContact(square, {-1.0f, 0.0f}, -area_width, material,
-                     allow_restitution, restitution_velocity_threshold);
-  ResolveWallContact(square, {0.0f, 1.0f}, 0.0f, material, allow_restitution,
-                     restitution_velocity_threshold);
-  ResolveWallContact(square, {0.0f, -1.0f}, -area_height, material,
-                     allow_restitution, restitution_velocity_threshold);
+  ForEachWall(square, area_width, area_height, material, allow_restitution,
+              restitution_velocity_threshold, false);
 }
 
 void ResolveWindowCollision(Circle& circle, float area_width, float area_height,
@@ -173,14 +216,44 @@ void ResolveWindowCollision(Circle& circle, float area_width, float area_height,
                             float restitution_velocity_threshold) {
   const ResolvedMaterial material =
       MixWithWorld(circle.material, restitution, friction);
-  ResolveWallContact(circle, {1.0f, 0.0f}, 0.0f, material, allow_restitution,
-                     restitution_velocity_threshold);
-  ResolveWallContact(circle, {-1.0f, 0.0f}, -area_width, material,
-                     allow_restitution, restitution_velocity_threshold);
-  ResolveWallContact(circle, {0.0f, 1.0f}, 0.0f, material, allow_restitution,
-                     restitution_velocity_threshold);
-  ResolveWallContact(circle, {0.0f, -1.0f}, -area_height, material,
-                     allow_restitution, restitution_velocity_threshold);
+  ForEachWall(circle, area_width, area_height, material, allow_restitution,
+              restitution_velocity_threshold, false);
+}
+
+void ResolveWindowCollisionVelocity(Rectangle& square, float area_width,
+                                    float area_height, float restitution,
+                                    float friction, bool allow_restitution,
+                                    float restitution_velocity_threshold) {
+  const ResolvedMaterial material =
+      MixWithWorld(square.material, restitution, friction);
+  ForEachWall(square, area_width, area_height, material, allow_restitution,
+              restitution_velocity_threshold, true);
+}
+
+void ResolveWindowCollisionVelocity(Circle& circle, float area_width,
+                                    float area_height, float restitution,
+                                    float friction, bool allow_restitution,
+                                    float restitution_velocity_threshold) {
+  const ResolvedMaterial material =
+      MixWithWorld(circle.material, restitution, friction);
+  ForEachWall(circle, area_width, area_height, material, allow_restitution,
+              restitution_velocity_threshold, true);
+}
+
+void ResolveWindowCollisionSnap(Rectangle& square, float area_width,
+                                float area_height) {
+  ResolveWallContactSnap(square, {1.0f, 0.0f}, 0.0f);
+  ResolveWallContactSnap(square, {-1.0f, 0.0f}, -area_width);
+  ResolveWallContactSnap(square, {0.0f, 1.0f}, 0.0f);
+  ResolveWallContactSnap(square, {0.0f, -1.0f}, -area_height);
+}
+
+void ResolveWindowCollisionSnap(Circle& circle, float area_width,
+                                float area_height) {
+  ResolveWallContactSnap(circle, {1.0f, 0.0f}, 0.0f);
+  ResolveWallContactSnap(circle, {-1.0f, 0.0f}, -area_width);
+  ResolveWallContactSnap(circle, {0.0f, 1.0f}, 0.0f);
+  ResolveWallContactSnap(circle, {0.0f, -1.0f}, -area_height);
 }
 
 }  // namespace tiny2d::internal

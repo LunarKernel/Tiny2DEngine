@@ -8,6 +8,23 @@ not product versions.
 
 ### Added
 
+- V20 StackLab: a ten-box stack that truly rests through the engine's
+  new warm-starting contact solver, with live ROADMAP §11 criteria,
+  per-interface load telemetry validated against Newtonian statics
+  ((n-k) m g to 0.000% measured), and offset and collapse
+  demonstrations.
+- Engine solver stabilization: tunable `SolverSettings` (iterations,
+  position slop, correction factor; defaults bit-identical to the
+  historical constants) and a caller-owned `ContactCache` enabling an
+  accumulated-impulse warm-starting contact formulation with stable
+  manifold feature ids, deterministic pair-fallback matching, and a
+  wall-anchored iteration structure, behind a new full-control `Update`
+  overload. The historical cold path is unchanged and golden-guarded.
+- A documented, measured limitation: offset stacks stand without
+  collapse but wobble at 0.06-0.10 m/s from manifold point-count
+  flicker at marginally-clipped tilted interfaces; a
+  persistent-contact-manifolds trigger row was added to the roadmap's
+  deferred-work table.
 - V19 ChaosLab: a point-mass double pendulum on rod constraints with
   small-angle normal-mode anchors, conservative and damped energy budgets
   in the 25-degree regime, rod-drift and determinism guarantees, and a
@@ -50,6 +67,11 @@ not product versions.
 
 ### Changed
 
+- The `ConstraintSet` overload now forwards to the new full-control
+  overload with default solver settings and no cache, so all five public
+  `Update` entry points share one step path; the wall contact resolve
+  was split into velocity and snap halves (recombined bit-identically on
+  the cold path) so the warm path can anchor every iteration.
 - The constrained `Update` overload taking pin and rope vectors now
   forwards to the new `ConstraintSet` overload with empty rod vectors, so
   all four public `Update` entry points share one step path.

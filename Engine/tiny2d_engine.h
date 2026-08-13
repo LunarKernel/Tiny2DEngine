@@ -274,6 +274,48 @@ struct RopeReaction {
   float tension_b{};
 };
 
+// Tunable contact-solver parameters. The defaults reproduce the
+// historical hardcoded constants bit for bit, so existing callers keep
+// their exact trajectories (golden-guarded). position_slop and
+// position_correction affect body-body contacts only; window/wall
+// contacts always resolve with their full positional snap.
+struct SolverSettings {
+  // Contact-resolution rounds per step, in [1, 128].
+  int iterations{4};
+  // Penetration depth tolerated before positional correction, >= 0
+  // length units.
+  float position_slop{0.01f};
+  // Fraction of excess penetration removed per correction, in [0, 1].
+  float position_correction{0.8f};
+};
+
+// Caller-owned persistent contact store enabling warm starting: passing
+// the same cache to consecutive Update calls on the same world carries
+// accumulated contact impulses across steps, which is what lets resting
+// stacks truly rest. Entries are engine-owned data; callers construct,
+// keep, and clear the cache but never edit entries. CALLERS MUST CLEAR
+// the cache whenever bodies are inserted, removed, or reordered; keys
+// pack body indices and would silently retarget otherwise. A zero
+// delta_time call leaves the cache untouched.
+struct ContactCache {
+  struct Entry {
+    // Identifies one body-body contact point across steps: the two body
+    // slots (kind + index packed) and a feature id (reference face plus
+    // clip-point id for rectangle pairs, zero for circle contacts).
+    // Wall contacts are never cached. Entries stay sorted by key.
+    unsigned long long key{};
+    float normal_impulse{};
+    // Signed scalar along the manifold's fixed tangent basis
+    // (perp(normal) = {-normal.y, normal.x}).
+    float tangent_impulse{};
+  };
+  std::vector<Entry> entries;
+  // Statistics from the last nonzero step: contact points seen and how
+  // many warm-started from a cache hit.
+  int contact_count{};
+  int warm_started_count{};
+};
+
 // pin_forces[i] is the force the pin exerts on its circle (for a pulley
 // hanging in gravity, approximately its weight pointing up, negative y). It
 // reports only the pin impulse: rope anchors are fixed world points, so the
@@ -336,6 +378,42 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
             const ConstraintSet& constraints, float delta_time,
             float area_width, float area_height, float restitution,
             float friction = 0.4f, Vec2 electric_field = {},
+            float gravity = 98.1f, float restitution_velocity_threshold = 20.0f,
+            bool enable_circle_circle_ccd = false,
+            ConstraintReactions* reactions = nullptr);
+
+// Full-control overload: constraints plus tunable solver settings plus an
+// optional warm-starting contact cache. The ConstraintSet overload above
+// forwards here with default settings and no cache, so the single step
+// path is preserved (wrapper-consistency and golden tests keep it
+// bitwise).
+//
+// With contact_cache == nullptr the existing per-iteration contact solve
+// runs unchanged; SolverSettings only substitutes the formerly hardcoded
+// iteration count, position slop, and correction factor, whose defaults
+// equal those constants. With a non-null cache, body-body contacts switch
+// to an accumulated-impulse solve: manifolds are detected once per step
+// with stable feature ids, matched cache impulses are applied before the
+// first iteration, iterations clamp accumulated totals (normal >= 0,
+// |tangent| <= friction * normal on a fixed per-manifold tangent basis),
+// the wall velocity resolve anchors every iteration, three positional
+// correction passes plus the wall snap follow, and accumulated impulses
+// are written back with stale entries dropped. Restitution captures each
+// point's approach velocity before warm application every step, gated by
+// the same velocity threshold as the cold path.
+//
+// Validation extends the constrained overload's rules: iterations in
+// [1, 128]; position_slop finite and non-negative; position_correction
+// finite in [0, 1]; cache entries must hold finite impulses with
+// normal_impulse >= 0 and strictly increasing keys;
+// enable_circle_circle_ccd must be false when a cache is passed. Invalid
+// input throws std::invalid_argument before any state (bodies,
+// *reactions, or *contact_cache) is modified.
+void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
+            const ConstraintSet& constraints,
+            const SolverSettings& solver_settings, ContactCache* contact_cache,
+            float delta_time, float area_width, float area_height,
+            float restitution, float friction = 0.4f, Vec2 electric_field = {},
             float gravity = 98.1f, float restitution_velocity_threshold = 20.0f,
             bool enable_circle_circle_ccd = false,
             ConstraintReactions* reactions = nullptr);

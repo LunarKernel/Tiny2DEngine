@@ -3,7 +3,7 @@
 - **Document status:** Proposal
 - **Project baseline:** V14 development line, based on the 2.0 release
 - **Target milestone:** Tiny2D Physics Lab 3.0
-- **Last updated:** 2026-08-11 (V19 delivered)
+- **Last updated:** 2026-08-11 (V20 delivered)
 
 ## 1. Purpose
 
@@ -28,7 +28,7 @@ recommended, and optional work respectively.
 
 ## 2. Current Baseline
 
-The current development line contains nine independent experiment families:
+The current development line contains ten independent experiment families:
 
 - **V9 Incline Laboratory:** blocks, an incline, a floor, collisions,
   friction, a spring, a uniform electric field, SI calibration, telemetry, and
@@ -77,14 +77,32 @@ The current development line contains nine independent experiment families:
   preset; the chaotic 120-degree reference is bound by rod-drift,
   divergence, determinism, and finiteness criteria, with its numerical
   energy loss quantified as a limitation below.
+- **V20 StackLab (delivered):** a ten-box stack that truly rests on the
+  engine's new warm-starting contact solver: tunable `SolverSettings`
+  plus a caller-owned `ContactCache` drive an accumulated-impulse
+  formulation with stable contact feature ids, while the historical cold
+  path stays bit-identical (§3.2 additive rule). The aligned reference
+  meets every §11 criterion with margin — measured exact-zero resting
+  speed and per-interface loads matching the (n-k) m g statics anchor to
+  0.000% — with evidence in `Engine/tiny2d_engine_test.cc`
+  (`TestWarmStartedStackRestsAndMatchesInterfaceLoads`,
+  `TestSolverSettingsMatchHistoricalConstantsBitwise`,
+  `TestWarmStartRestitutionStillBounces`) and the V20 suite
+  (`TestReferenceStackMeetsRoadmapCriteria`,
+  `TestOffsetStackStandsWithBoundedWobble`,
+  `TestCollapsePresetStaysFiniteAndDeterministic`). Offset stacks stand
+  without collapse (the cold solver toppled them) but wobble within a
+  documented limitation below.
 
 The reusable engine provides rotating rectangular and circular bodies, SAT
-collision detection, one- and two-point contact manifolds, impulse response,
-friction, restitution, per-body materials, applied forces and torques,
-optional circle-circle CCD, bilateral constraints with reaction telemetry
-(revolute pins, pulley ropes, world-anchored and body-to-body rods,
-composable through a `ConstraintSet`), static bodies, fixed rotation, field
-acceleration, and boundary collisions. The engine implementation is split
+collision detection, one- and two-point contact manifolds with stable
+feature ids, impulse response, friction, restitution, per-body materials,
+applied forces and torques, optional circle-circle CCD, bilateral
+constraints with reaction telemetry (revolute pins, pulley ropes,
+world-anchored and body-to-body rods, composable through a
+`ConstraintSet`), tunable solver settings and an opt-in warm-starting
+contact cache for genuinely resting stacks, static bodies, fixed rotation,
+field acceleration, and boundary collisions. The engine implementation is split
 into `Engine/internal/` units (body_math, validation, contacts, solver,
 constraints) behind an unchanged public header. The Sandbox layer provides
 model-specific SI units, a shared application shell
@@ -105,8 +123,25 @@ The main limitations relevant to this roadmap are:
   several percent of the released energy per minute even at the ChaosLab's
   32x substepping, so energy acceptance binds in the 25-degree regime and
   the upgrade path is the §14 energy-consistent-integration trigger;
+- the contact solver has two coexisting formulations per §3.2's additive
+  rule: the historical per-iteration cold path (bit-identical and
+  golden-guarded) and the warm-starting accumulated-impulse path behind
+  the caller-owned cache; migrating the cold path needs its own parity
+  evidence and is deferred (raw iteration counts are the wrong lever for
+  resting speed: the cold path improved only ~5-7x per 4x iterations,
+  extrapolating to 256+ for the criterion, while warm starting reached
+  measured exact zero);
+- imperfect (offset) stacks stand without collapse under warm starting
+  but wobble at a measured 0.06-0.10 m/s: marginally-clipped tilted
+  interfaces flicker their second manifold point in and out of
+  existence, cold-starting it on every reappearance (638 warm-start
+  misses per 4800 steps measured; insensitive to iterations, correction
+  factor, and offset amplitude; pair-fallback matching does not remove
+  it). The recorded fix path is the §14 persistent-contact-manifolds
+  trigger;
 - no time-series plotting, data export, or experiment file format;
-- no general-purpose contact cache, warm start, or sleeping system.
+- no sleeping system (deliberately: a sleep threshold above the resting
+  criterion would mask rather than solve).
 
 ## 3. Strategic Principles
 
@@ -403,6 +438,7 @@ The following capabilities remain deferred until a measurable trigger exists:
 | Full-project `double` conversion | Precision tests show `float` is the limiting error source |
 | Test-framework migration | The current lightweight tests prevent practical filtering, diagnosis, or reporting |
 | Energy-consistent constraint integration | An experiment needs sub-1% energy budgets on fast-rotating constraint trajectories (the v^4 dt / L^2 projection loss documented in §2 becomes the limiting error source) |
+| Persistent contact manifolds | An experiment needs sub-1e-3 m/s rest on imperfect stacks (the offset-stack point-count-flicker wobble documented in §2 becomes the limiting behavior) |
 
 ## 15. Explicit Non-Goals
 
@@ -436,12 +472,11 @@ The project is ready for a formal 3.0 release when:
 
 ## 17. Recommended Next Action
 
-V15 through V19 are delivered (see §2). The next feature proposal SHOULD be
-**V20 StackLab: Persistent Contact Stability** (§11).
-
-The V20 proposal should define the reference stack scenario, the solver
-stabilization scope (iterations, persistent contact identifiers, cached
-impulses, warm starting), and exact resting-contact tolerances before
-implementation begins, keeping the one-capability-one-experiment pairing
-used by V15–V19. §11's acceptance criteria already specify the ten-body
-60-second reference stack.
+V15 through V20 are delivered (see §2), completing the §4 feature table.
+The next work SHOULD target the **Physics Lab 3.0 release gate** (§16):
+the §12 measurement capabilities (time-series plotting, CSV export, the
+versioned experiment file), packaging a Windows distribution that runs on
+a clean machine, release-version consistency across CMake, vcpkg, the
+window title, tag, and changelog, and an explicit license with release
+checksums. That work should be proposed and reviewed with the same
+contract-first discipline used by V15-V20.

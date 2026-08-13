@@ -12,6 +12,7 @@ enum class SimulationResult {
 
 SimulationResult RunAtwoodLabSimulation(SDL_Renderer* renderer);
 SimulationResult RunChaosLabSimulation(SDL_Renderer* renderer);
+SimulationResult RunStackLabSimulation(SDL_Renderer* renderer);
 SimulationResult RunInclineSpringSimulation(SDL_Renderer* renderer);
 SimulationResult RunRotationPendulumSimulation(SDL_Renderer* renderer);
 SimulationResult RunRollingDiskSimulation(SDL_Renderer* renderer);

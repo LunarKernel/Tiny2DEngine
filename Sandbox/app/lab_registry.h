@@ -20,7 +20,12 @@ struct LabInfo {
   SimulationResult (*run)(SDL_Renderer* renderer);
 };
 
-inline constexpr std::array<LabInfo, 9> kLabs = {{
+inline constexpr std::array<LabInfo, 10> kLabs = {{
+    {"V20 StackLab: Persistent Contact Stability",
+     "A warm-started box stack that truly rests: live ROADMAP criteria, "
+     "per-interface load telemetry against Newtonian statics, and offset "
+     "and collapse demonstrations.",
+     "Open V20 StackLab", &RunStackLabSimulation},
     {"V19 ChaosLab: Double Pendulum",
      "Two point-mass bobs on rigid rod constraints with normal-mode "
      "anchors, energy telemetry, and a shadow run that makes chaotic "

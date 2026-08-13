@@ -2185,6 +2185,383 @@ void TestConstraintSetZeroDtReportsZeroRodForces() {
   CHECK(reactions.anchor_rod_forces[0] == 0.0f);
 }
 
+std::vector<tiny2d::Rectangle> MakeStackBoxes(int count, float offset) {
+  std::vector<tiny2d::Rectangle> boxes(static_cast<std::size_t>(count));
+  for (int i = 0; i < count; ++i) {
+    auto& box = boxes[static_cast<std::size_t>(i)];
+    box.mass = 1.0f;
+    box.width = 1.0f;
+    box.height = 1.0f;
+    box.position = {50.0f + ((i % 2 == 0) ? offset : -offset),
+                    99.5f - static_cast<float>(i)};
+    box.angular_damping_rate = 0.0f;
+  }
+  return boxes;
+}
+
+tiny2d::SolverSettings MakeStackSettings() {
+  tiny2d::SolverSettings settings;
+  settings.iterations = 16;
+  settings.position_slop = 0.002f;
+  return settings;
+}
+
+void StepStack(std::vector<tiny2d::Rectangle>& boxes,
+               tiny2d::ContactCache* cache,
+               const tiny2d::SolverSettings& settings) {
+  std::vector<tiny2d::Circle> no_circles;
+  tiny2d::Update(boxes, no_circles, tiny2d::ConstraintSet{}, settings, cache,
+                 1.0f / 480.0f, 100.0f, 100.0f, 0.0f, 0.6f, {}, 9.81f, 20.0f,
+                 false, nullptr);
+}
+
+void TestFullControlOverloadMatchesConstraintSetOverload() {
+  // Wrapper-consistency gate: the ConstraintSet overload and the
+  // full-control overload with default settings and no cache must stay
+  // bit-identical on the golden scene.
+  std::vector<tiny2d::Rectangle> via_set = MakeGoldenRectangles();
+  std::vector<tiny2d::Circle> via_set_circles = MakeGoldenCircles();
+  std::vector<tiny2d::Rectangle> full = via_set;
+  std::vector<tiny2d::Circle> full_circles = via_set_circles;
+  const tiny2d::ConstraintSet no_constraints;
+
+  for (int step = 0; step < 300; ++step) {
+    tiny2d::Update(via_set, via_set_circles, no_constraints, 1.0f / 240.0f,
+                   90.0f, 80.0f, 0.5f, 0.4f, {3.0f, -2.0f}, 98.1f, 20.0f, false,
+                   nullptr);
+    tiny2d::Update(full, full_circles, no_constraints, tiny2d::SolverSettings{},
+                   nullptr, 1.0f / 240.0f, 90.0f, 80.0f, 0.5f, 0.4f,
+                   {3.0f, -2.0f}, 98.1f, 20.0f, false, nullptr);
+    for (std::size_t i = 0; i < via_set.size(); ++i) {
+      CHECK(SameRectangle(via_set[i], full[i]));
+    }
+    for (std::size_t i = 0; i < via_set_circles.size(); ++i) {
+      CHECK(SameCircle(via_set_circles[i], full_circles[i]));
+    }
+  }
+}
+
+void TestSolverSettingsMatchHistoricalConstantsBitwise() {
+  // Explicit settings equal to the formerly hardcoded constants must
+  // reproduce the default path bit for bit.
+  std::vector<tiny2d::Rectangle> defaults = MakeGoldenRectangles();
+  std::vector<tiny2d::Circle> defaults_circles = MakeGoldenCircles();
+  std::vector<tiny2d::Rectangle> explicit_settings = defaults;
+  std::vector<tiny2d::Circle> explicit_circles = defaults_circles;
+  const tiny2d::ConstraintSet no_constraints;
+  tiny2d::SolverSettings historical;
+  historical.iterations = 4;
+  historical.position_slop = 0.01f;
+  historical.position_correction = 0.8f;
+
+  for (int step = 0; step < 300; ++step) {
+    tiny2d::Update(defaults, defaults_circles, no_constraints, 1.0f / 240.0f,
+                   90.0f, 80.0f, 0.5f, 0.4f, {3.0f, -2.0f}, 98.1f, 20.0f, false,
+                   nullptr);
+    tiny2d::Update(explicit_settings, explicit_circles, no_constraints,
+                   historical, nullptr, 1.0f / 240.0f, 90.0f, 80.0f, 0.5f, 0.4f,
+                   {3.0f, -2.0f}, 98.1f, 20.0f, false, nullptr);
+    for (std::size_t i = 0; i < defaults.size(); ++i) {
+      CHECK(SameRectangle(defaults[i], explicit_settings[i]));
+    }
+  }
+}
+
+void TestWarmStartedStackRestsAndMatchesInterfaceLoads() {
+  // The ROADMAP section 11 reference: a warm-started ten-box stack must truly
+  // rest, deterministically, with per-interface loads matching the
+  // supported weights (the analytical anchor).
+  std::vector<tiny2d::Rectangle> first = MakeStackBoxes(10, 0.0f);
+  std::vector<tiny2d::Rectangle> second = MakeStackBoxes(10, 0.0f);
+  tiny2d::ContactCache first_cache;
+  tiny2d::ContactCache second_cache;
+  const tiny2d::SolverSettings settings = MakeStackSettings();
+
+  std::array<double, 9> load_sums{};
+  int load_samples = 0;
+  for (int step = 1; step <= 20 * 480; ++step) {
+    StepStack(first, &first_cache, settings);
+    StepStack(second, &second_cache, settings);
+    if (step > 15 * 480) {
+      // Final 5 s: resting speeds and interface loads.
+      for (const auto& box : first) {
+        CHECK(std::hypot(box.velocity.x, box.velocity.y) < 0.001f);
+        CHECK(std::abs(box.angular_velocity) < 0.001f);
+      }
+      for (const auto& entry : first_cache.entries) {
+        const int index_a = static_cast<int>((entry.key >> 29) & 0x1FFFFF);
+        const int index_b = static_cast<int>((entry.key >> 8) & 0x1FFFFF);
+        if (index_b == index_a + 1 && index_a < 9) {
+          load_sums[static_cast<std::size_t>(index_a)] +=
+              entry.normal_impulse * 480.0;
+        }
+      }
+      ++load_samples;
+    }
+  }
+  // Penetration at rest stays inside the criterion.
+  for (int i = 0; i + 1 < 10; ++i) {
+    const double lower_top =
+        first[static_cast<std::size_t>(i)].position.y - 0.5;
+    const double upper_bottom =
+        first[static_cast<std::size_t>(i + 1)].position.y + 0.5;
+    CHECK(upper_bottom - lower_top < 0.005);
+  }
+  // Time-averaged interface loads match (n - k) m g within 1%.
+  for (int i = 0; i < 9; ++i) {
+    const double expected = (9 - i) * 9.81;
+    const double measured =
+        load_sums[static_cast<std::size_t>(i)] / load_samples;
+    CHECK(std::abs(measured - expected) / expected < 0.01);
+  }
+  // Bitwise determinism including the cache.
+  for (std::size_t i = 0; i < first.size(); ++i) {
+    CHECK(SameRectangle(first[i], second[i]));
+  }
+  CHECK(first_cache.entries.size() == second_cache.entries.size());
+  for (std::size_t i = 0; i < first_cache.entries.size(); ++i) {
+    CHECK(first_cache.entries[i].key == second_cache.entries[i].key);
+    CHECK(first_cache.entries[i].normal_impulse ==
+          second_cache.entries[i].normal_impulse);
+    CHECK(first_cache.entries[i].tangent_impulse ==
+          second_cache.entries[i].tangent_impulse);
+  }
+}
+
+void TestWarmStartMatchedFractionAndStaleEviction() {
+  std::vector<tiny2d::Rectangle> boxes = MakeStackBoxes(4, 0.0f);
+  tiny2d::ContactCache cache;
+  const tiny2d::SolverSettings settings = MakeStackSettings();
+  for (int step = 0; step < 480; ++step) {
+    StepStack(boxes, &cache, settings);
+  }
+  // Settled: every contact point warm-starts from a cache hit.
+  CHECK(cache.contact_count > 0);
+  CHECK(cache.warm_started_count == cache.contact_count);
+  const std::size_t settled_entries = cache.entries.size();
+
+  // Teleport the top box away: its contact entries must evict.
+  boxes[3].position = {20.0f, 50.0f};
+  boxes[3].velocity = {};
+  StepStack(boxes, &cache, settings);
+  CHECK(cache.entries.size() < settled_entries);
+}
+
+void TestAccumulatedFrictionClampRespectsCone() {
+  // A driven top box slides on the bottom box; the accumulated tangent
+  // impulse must stay inside the sticking cone.
+  std::vector<tiny2d::Rectangle> boxes = MakeStackBoxes(2, 0.0f);
+  tiny2d::ContactCache cache;
+  const tiny2d::SolverSettings settings = MakeStackSettings();
+  for (int step = 0; step < 480; ++step) {
+    tiny2d::AddForceAtPoint(boxes[1], {30.0f, 0.0f}, boxes[1].position);
+    StepStack(boxes, &cache, settings);
+    for (const auto& entry : cache.entries) {
+      CHECK(std::abs(entry.tangent_impulse) <=
+            0.6f * entry.normal_impulse + 0.000001f);
+    }
+  }
+  // The driven box did slide.
+  CHECK(boxes[1].position.x > 50.5f);
+}
+
+void TestWarmStartRestitutionStillBounces() {
+  // A fast drop onto a static platform must still bounce with the cache
+  // on: the approach velocity is captured before warm application.
+  std::vector<tiny2d::Rectangle> bodies(2);
+  bodies[0].mass = 0.0f;  // Static platform.
+  bodies[0].position = {50.0f, 80.0f};
+  bodies[0].width = 40.0f;
+  bodies[0].height = 4.0f;
+  bodies[0].material = {0.8f, 0.0f, 0.0f};
+  bodies[1].mass = 1.0f;
+  bodies[1].position = {50.0f, 70.0f};
+  bodies[1].velocity = {0.0f, 30.0f};
+  bodies[1].width = 2.0f;
+  bodies[1].height = 2.0f;
+  bodies[1].fixed_rotation = true;
+  bodies[1].material = {0.8f, 0.0f, 0.0f};
+  bodies[1].angular_damping_rate = 0.0f;
+  std::vector<tiny2d::Circle> no_circles;
+  tiny2d::ContactCache cache;
+  tiny2d::SolverSettings settings;
+
+  float minimum_velocity = 0.0f;
+  for (int step = 0; step < 480; ++step) {
+    tiny2d::Update(bodies, no_circles, tiny2d::ConstraintSet{}, settings,
+                   &cache, 1.0f / 480.0f, 100.0f, 100.0f, 0.0f, 0.0f, {}, 0.0f,
+                   5.0f, false, nullptr);
+    minimum_velocity = std::min(minimum_velocity, bodies[1].velocity.y);
+  }
+  // Rebound speed approaches restitution * approach speed (0.8 * ~30).
+  CHECK(minimum_velocity < -20.0f);
+}
+
+void TestSolverSettingsAndCacheRejectInvalidInput() {
+  const auto expect_reject = [](auto mutate) {
+    std::vector<tiny2d::Rectangle> boxes = MakeStackBoxes(3, 0.0f);
+    const std::vector<tiny2d::Rectangle> before = boxes;
+    std::vector<tiny2d::Circle> no_circles;
+    tiny2d::SolverSettings settings;
+    tiny2d::ContactCache cache;
+    cache.entries = {{100ull, 1.0f, 0.5f}, {200ull, 2.0f, -0.25f}};
+    bool use_ccd = false;
+    mutate(settings, cache, use_ccd);
+    // Snapshot after the mutation: atomicity means the ENGINE leaves the
+    // (possibly deliberately corrupted) cache exactly as passed.
+    const std::vector<tiny2d::ContactCache::Entry> cache_before = cache.entries;
+    bool threw = false;
+    try {
+      tiny2d::Update(boxes, no_circles, tiny2d::ConstraintSet{}, settings,
+                     &cache, 1.0f / 480.0f, 100.0f, 100.0f, 0.0f, 0.6f, {},
+                     9.81f, 20.0f, use_ccd, nullptr);
+    } catch (const std::invalid_argument&) {
+      threw = true;
+    }
+    CHECK(threw);
+    // Failure atomicity: bodies and the cache stay untouched.
+    for (std::size_t i = 0; i < before.size(); ++i) {
+      CHECK(SameRectangle(boxes[i], before[i]));
+    }
+    CHECK(cache.entries.size() == cache_before.size());
+    for (std::size_t i = 0; i < cache_before.size(); ++i) {
+      CHECK(cache.entries[i].key == cache_before[i].key);
+      CHECK(cache.entries[i].normal_impulse == cache_before[i].normal_impulse);
+    }
+  };
+
+  expect_reject([](tiny2d::SolverSettings& s, tiny2d::ContactCache&, bool&) {
+    s.iterations = 0;
+  });
+  expect_reject([](tiny2d::SolverSettings& s, tiny2d::ContactCache&, bool&) {
+    s.iterations = 129;
+  });
+  expect_reject([](tiny2d::SolverSettings& s, tiny2d::ContactCache&, bool&) {
+    s.position_slop = -0.01f;
+  });
+  expect_reject([](tiny2d::SolverSettings& s, tiny2d::ContactCache&, bool&) {
+    s.position_slop = std::numeric_limits<float>::quiet_NaN();
+  });
+  expect_reject([](tiny2d::SolverSettings& s, tiny2d::ContactCache&, bool&) {
+    s.position_correction = 1.5f;
+  });
+  expect_reject([](tiny2d::SolverSettings& s, tiny2d::ContactCache&, bool&) {
+    s.position_correction = -0.1f;
+  });
+  expect_reject([](tiny2d::SolverSettings&, tiny2d::ContactCache& c, bool&) {
+    c.entries[0].normal_impulse = -1.0f;
+  });
+  expect_reject([](tiny2d::SolverSettings&, tiny2d::ContactCache& c, bool&) {
+    c.entries[1].tangent_impulse = std::numeric_limits<float>::infinity();
+  });
+  expect_reject([](tiny2d::SolverSettings&, tiny2d::ContactCache& c, bool&) {
+    std::swap(c.entries[0], c.entries[1]);  // Unsorted keys.
+  });
+  expect_reject([](tiny2d::SolverSettings&, tiny2d::ContactCache& c, bool&) {
+    c.entries[1].key = c.entries[0].key;  // Duplicate keys.
+  });
+  expect_reject([](tiny2d::SolverSettings&, tiny2d::ContactCache&, bool& ccd) {
+    ccd = true;  // CCD cannot combine with a cache.
+  });
+}
+
+void TestWarmCacheKeysStayDistinctAcrossPairKinds() {
+  // Regression for the key-packing collision: circle-circle (i, j) and
+  // rect-circle (i, j) pairs must produce distinct cache keys, or the
+  // write-back stores duplicates and the next call rejects the engine's
+  // own cache. Two balls resting on a box exercises both pair kinds with
+  // identical index pairs.
+  std::vector<tiny2d::Rectangle> rectangles(1);
+  rectangles[0].mass = 5.0f;
+  rectangles[0].position = {50.0f, 99.0f};
+  rectangles[0].width = 10.0f;
+  rectangles[0].height = 2.0f;
+  rectangles[0].angular_damping_rate = 0.0f;
+  std::vector<tiny2d::Circle> circles(2);
+  circles[0].mass = 1.0f;
+  circles[0].position = {49.0f, 97.0f};
+  circles[0].radius = 1.0f;
+  circles[0].angular_damping_rate = 0.0f;
+  circles[1] = circles[0];
+  circles[1].position = {50.9f, 97.0f};  // Touches circle 0 and the box.
+  tiny2d::ContactCache cache;
+  tiny2d::SolverSettings settings = MakeStackSettings();
+
+  for (int step = 0; step < 240; ++step) {
+    // A throw here (strictly-increasing key validation rejecting the
+    // engine's own write-back) is exactly the regression this guards.
+    tiny2d::Update(rectangles, circles, tiny2d::ConstraintSet{}, settings,
+                   &cache, 1.0f / 480.0f, 100.0f, 100.0f, 0.0f, 0.6f, {}, 9.81f,
+                   20.0f, false, nullptr);
+  }
+  for (std::size_t i = 1; i < cache.entries.size(); ++i) {
+    CHECK(cache.entries[i].key > cache.entries[i - 1].key);
+  }
+  CHECK(IsFinite(circles[0]));
+  CHECK(IsFinite(circles[1]));
+}
+
+void TestWarmPathSkipsStaticStaticPairs() {
+  // Regression for the static-static NaN: overlapping static bodies are
+  // legal input, and the warm path must skip them like the cold path's
+  // early-out instead of dividing by a zero impulse denominator.
+  std::vector<tiny2d::Rectangle> rectangles(3);
+  rectangles[0].mass = 0.0f;  // Two overlapping static floor slabs.
+  rectangles[0].position = {45.0f, 95.0f};
+  rectangles[0].width = 20.0f;
+  rectangles[0].height = 4.0f;
+  rectangles[1] = rectangles[0];
+  rectangles[1].position = {55.0f, 95.0f};
+  rectangles[2].mass = 1.0f;  // A dynamic box resting on them.
+  rectangles[2].position = {50.0f, 92.4f};
+  rectangles[2].width = 1.0f;
+  rectangles[2].height = 1.0f;
+  rectangles[2].angular_damping_rate = 0.0f;
+  std::vector<tiny2d::Circle> no_circles;
+  tiny2d::ContactCache cache;
+  const tiny2d::SolverSettings settings = MakeStackSettings();
+
+  for (int step = 0; step < 480; ++step) {
+    tiny2d::Update(rectangles, no_circles, tiny2d::ConstraintSet{}, settings,
+                   &cache, 1.0f / 480.0f, 100.0f, 100.0f, 0.0f, 0.6f, {}, 9.81f,
+                   20.0f, false, nullptr);
+  }
+  for (const auto& rectangle : rectangles) {
+    CHECK(IsFinite(rectangle));
+  }
+  for (const auto& entry : cache.entries) {
+    CHECK(std::isfinite(entry.normal_impulse));
+    CHECK(std::isfinite(entry.tangent_impulse));
+  }
+}
+
+void TestFullControlZeroDtLeavesCacheUntouched() {
+  std::vector<tiny2d::Rectangle> boxes = MakeStackBoxes(3, 0.0f);
+  tiny2d::ContactCache cache;
+  const tiny2d::SolverSettings settings = MakeStackSettings();
+  for (int step = 0; step < 240; ++step) {
+    StepStack(boxes, &cache, settings);
+  }
+  const std::vector<tiny2d::ContactCache::Entry> entries_before = cache.entries;
+  const int contacts_before = cache.contact_count;
+  const int warm_before = cache.warm_started_count;
+
+  std::vector<tiny2d::Circle> no_circles;
+  tiny2d::Update(boxes, no_circles, tiny2d::ConstraintSet{}, settings, &cache,
+                 0.0f, 100.0f, 100.0f, 0.0f, 0.6f, {}, 9.81f, 20.0f, false,
+                 nullptr);
+
+  CHECK(cache.contact_count == contacts_before);
+  CHECK(cache.warm_started_count == warm_before);
+  CHECK(cache.entries.size() == entries_before.size());
+  for (std::size_t i = 0; i < entries_before.size(); ++i) {
+    CHECK(cache.entries[i].key == entries_before[i].key);
+    CHECK(cache.entries[i].normal_impulse == entries_before[i].normal_impulse);
+    CHECK(cache.entries[i].tangent_impulse ==
+          entries_before[i].tangent_impulse);
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -2249,5 +2626,15 @@ int main() {
   TestRodAndRopeShareBodyStaysFiniteAndDeterministic();
   TestConstrainedUpdateRejectsInvalidRods();
   TestConstraintSetZeroDtReportsZeroRodForces();
+  TestFullControlOverloadMatchesConstraintSetOverload();
+  TestSolverSettingsMatchHistoricalConstantsBitwise();
+  TestWarmStartedStackRestsAndMatchesInterfaceLoads();
+  TestWarmStartMatchedFractionAndStaleEviction();
+  TestAccumulatedFrictionClampRespectsCone();
+  TestWarmStartRestitutionStillBounces();
+  TestSolverSettingsAndCacheRejectInvalidInput();
+  TestWarmCacheKeysStayDistinctAcrossPairKinds();
+  TestWarmPathSkipsStaticStaticPairs();
+  TestFullControlZeroDtLeavesCacheUntouched();
   return 0;
 }

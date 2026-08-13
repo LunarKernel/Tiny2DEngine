@@ -11,6 +11,7 @@
 #include "internal/contacts.h"
 #include "internal/solver.h"
 #include "internal/validation.h"
+#include "internal/warm_contacts.h"
 
 // Public entry points: parameter validation, semi-implicit Euler integration,
 // and the step orchestration that drives the internal contact and solver
@@ -253,12 +254,29 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
          restitution_velocity_threshold, enable_circle_circle_ccd, reactions);
 }
 
+// The ConstraintSet overload forwards to the full-control step with
+// default solver settings and no cache, so every constrained caller
+// shares one path. Equivalence is protected by
+// TestFullControlOverloadMatchesConstraintSetOverload.
 void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
             const ConstraintSet& constraints, float delta_time,
             float area_width, float area_height, float restitution,
             float friction, Vec2 electric_field, float gravity,
             float restitution_velocity_threshold, bool enable_circle_circle_ccd,
             ConstraintReactions* reactions) {
+  Update(rectangles, circles, constraints, SolverSettings{}, nullptr,
+         delta_time, area_width, area_height, restitution, friction,
+         electric_field, gravity, restitution_velocity_threshold,
+         enable_circle_circle_ccd, reactions);
+}
+
+void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
+            const ConstraintSet& constraints,
+            const SolverSettings& solver_settings, ContactCache* contact_cache,
+            float delta_time, float area_width, float area_height,
+            float restitution, float friction, Vec2 electric_field,
+            float gravity, float restitution_velocity_threshold,
+            bool enable_circle_circle_ccd, ConstraintReactions* reactions) {
   Require(std::isfinite(delta_time) && delta_time >= 0.0f,
           "Delta time must be finite and non-negative.");
   Require(std::isfinite(area_width) && std::isfinite(area_height) &&
@@ -279,6 +297,12 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
       !constraints.anchor_rods.empty() || !constraints.link_rods.empty();
   Require(!enable_circle_circle_ccd || !has_constraints,
           "Circle-circle CCD cannot be combined with constraints.");
+  Require(!enable_circle_circle_ccd || contact_cache == nullptr,
+          "Circle-circle CCD cannot be combined with a contact cache.");
+  ValidateSolverSettings(solver_settings);
+  if (contact_cache != nullptr) {
+    ValidateContactCache(*contact_cache);
+  }
   ValidateConstraints(rectangles, circles, constraints, area_width,
                       area_height);
 
@@ -520,55 +544,74 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
     }
   }
 
-  for (int iteration = 0; iteration < kSolverIterations; ++iteration) {
-    const bool allow_restitution = iteration == 0;
-    for (std::size_t i = 0; i < rectangles.size(); ++i) {
-      for (std::size_t j = i + 1; j < rectangles.size(); ++j) {
-        const std::optional<ContactManifold> contact =
-            FindContact(rectangles[i], rectangles[j]);
-        if (contact.has_value()) {
-          ResolveContact(
-              rectangles[i], rectangles[j], *contact,
-              MixMaterials(rectangles[i].material, rectangles[j].material,
-                           restitution, friction),
-              allow_restitution, restitution_velocity_threshold);
+  if (contact_cache != nullptr && delta_time > 0.0f) {
+    // Warm-starting accumulated-impulse contact stage: detection once per
+    // step, cached impulses applied before the first iteration, wall
+    // velocity resolves anchoring every round, positional passes and the
+    // wall snap at the end, and impulse write-back with stale eviction.
+    // A zero delta_time skips this branch so the cache stays untouched.
+    SolveWarmContacts(rectangles, circles, *contact_cache, solver_settings,
+                      area_width, area_height, restitution, friction,
+                      restitution_velocity_threshold);
+  } else {
+    for (int iteration = 0; iteration < solver_settings.iterations;
+         ++iteration) {
+      const bool allow_restitution = iteration == 0;
+      for (std::size_t i = 0; i < rectangles.size(); ++i) {
+        for (std::size_t j = i + 1; j < rectangles.size(); ++j) {
+          const std::optional<ContactManifold> contact =
+              FindContact(rectangles[i], rectangles[j]);
+          if (contact.has_value()) {
+            ResolveContact(
+                rectangles[i], rectangles[j], *contact,
+                MixMaterials(rectangles[i].material, rectangles[j].material,
+                             restitution, friction),
+                allow_restitution, restitution_velocity_threshold,
+                solver_settings.position_slop,
+                solver_settings.position_correction);
+          }
         }
       }
-    }
-    for (std::size_t i = 0; i < circles.size(); ++i) {
-      for (std::size_t j = i + 1; j < circles.size(); ++j) {
-        const std::optional<ContactManifold> contact =
-            FindContact(circles[i], circles[j]);
-        if (contact.has_value()) {
-          ResolveContact(circles[i], circles[j], *contact,
-                         MixMaterials(circles[i].material, circles[j].material,
-                                      restitution, friction),
-                         allow_restitution, restitution_velocity_threshold);
+      for (std::size_t i = 0; i < circles.size(); ++i) {
+        for (std::size_t j = i + 1; j < circles.size(); ++j) {
+          const std::optional<ContactManifold> contact =
+              FindContact(circles[i], circles[j]);
+          if (contact.has_value()) {
+            ResolveContact(
+                circles[i], circles[j], *contact,
+                MixMaterials(circles[i].material, circles[j].material,
+                             restitution, friction),
+                allow_restitution, restitution_velocity_threshold,
+                solver_settings.position_slop,
+                solver_settings.position_correction);
+          }
         }
       }
-    }
-    for (Rectangle& rectangle : rectangles) {
-      for (Circle& circle : circles) {
-        const std::optional<ContactManifold> contact =
-            FindContact(rectangle, circle);
-        if (contact.has_value()) {
-          ResolveContact(rectangle, circle, *contact,
-                         MixMaterials(rectangle.material, circle.material,
-                                      restitution, friction),
-                         allow_restitution, restitution_velocity_threshold);
+      for (Rectangle& rectangle : rectangles) {
+        for (Circle& circle : circles) {
+          const std::optional<ContactManifold> contact =
+              FindContact(rectangle, circle);
+          if (contact.has_value()) {
+            ResolveContact(rectangle, circle, *contact,
+                           MixMaterials(rectangle.material, circle.material,
+                                        restitution, friction),
+                           allow_restitution, restitution_velocity_threshold,
+                           solver_settings.position_slop,
+                           solver_settings.position_correction);
+          }
         }
       }
-    }
 
-    for (Rectangle& rectangle : rectangles) {
-      ResolveWindowCollision(rectangle, area_width, area_height, restitution,
-                             friction, allow_restitution,
-                             restitution_velocity_threshold);
-    }
-    for (Circle& circle : circles) {
-      ResolveWindowCollision(circle, area_width, area_height, restitution,
-                             friction, allow_restitution,
-                             restitution_velocity_threshold);
+      for (Rectangle& rectangle : rectangles) {
+        ResolveWindowCollision(rectangle, area_width, area_height, restitution,
+                               friction, allow_restitution,
+                               restitution_velocity_threshold);
+      }
+      for (Circle& circle : circles) {
+        ResolveWindowCollision(circle, area_width, area_height, restitution,
+                               friction, allow_restitution,
+                               restitution_velocity_threshold);
+      }
     }
   }
 

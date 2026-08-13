@@ -26,6 +26,12 @@ struct ContactManifold {
   std::array<Vec2, 2> points{};
   std::size_t point_count{};
   float penetration;
+  // Stable per-point feature ids for warm-start matching: bit 7 encodes
+  // which body was the SAT reference, bits 4-6 the reference face index,
+  // bits 0-3 the clip id (incident vertex index 0-3, 4 + clip plane for
+  // an intersection point, 15 for the zero-clip support fallback).
+  // Circle-derived manifolds use id 0. Inert data on the cold path.
+  std::array<unsigned, 2> point_ids{};
 };
 
 struct SupportFeature {
@@ -44,8 +50,13 @@ SupportFeature FindSupportFeature(const std::array<Vec2, 4>& vertices,
                                   Vec2 axis, bool find_maximum);
 
 // A positive-area overlap yields a manifold; touching shapes yield nullopt.
+// prefer_stable_axis applies a 2% relative hysteresis to the SAT axis
+// choice so near-tied axes (stacked boxes) cannot flip the reference body
+// step to step and defeat warm-start matching; the default keeps the
+// historical strict comparison bit for bit.
 std::optional<ContactManifold> FindContact(const Rectangle& square_a,
-                                           const Rectangle& square_b);
+                                           const Rectangle& square_b,
+                                           bool prefer_stable_axis = false);
 std::optional<ContactManifold> FindContact(const Circle& circle_a,
                                            const Circle& circle_b);
 std::optional<ContactManifold> FindContact(const Rectangle& rectangle,

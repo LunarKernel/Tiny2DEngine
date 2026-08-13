@@ -51,6 +51,7 @@ add_library(Tiny2DEngine STATIC
     Engine/internal/contacts.cc
     Engine/internal/solver.cc
     Engine/internal/validation.cc
+    Engine/internal/warm_contacts.cc
     Engine/tiny2d_engine.cc
 )
 
@@ -72,6 +73,7 @@ if(TINY2D_BUILD_SANDBOX OR BUILD_TESTING)
       Sandbox/lorentz_particle_model.cc
       Sandbox/rolling_disk_model.cc
       Sandbox/rotation_pendulum_model.cc
+      Sandbox/stack_lab_model.cc
   )
 
   target_include_directories(Tiny2DSimulationModels PUBLIC
@@ -95,6 +97,7 @@ if(TINY2D_BUILD_SANDBOX)
       Sandbox/lorentz_particle_simulation.cc
       Sandbox/rolling_disk_simulation.cc
       Sandbox/rotation_pendulum_simulation.cc
+      Sandbox/stack_lab_simulation.cc
   )
 
   target_compile_definitions(Sandbox PRIVATE
@@ -230,4 +233,18 @@ if(BUILD_TESTING)
   # runs (53 s measured in Debug), so it needs far more headroom than the
   # other suites, especially under AddressSanitizer.
   set_tests_properties(Tiny2DChaosLabTests PROPERTIES TIMEOUT 180)
+
+  add_executable(Tiny2DStackLabTests
+      Sandbox/stack_lab_test.cc
+  )
+
+  target_link_libraries(Tiny2DStackLabTests PRIVATE Tiny2DSimulationModels
+                                                    Tiny2DTestSupport)
+  tiny2d_enable_warnings(Tiny2DStackLabTests)
+
+  add_test(NAME Tiny2DStackLabTests COMMAND Tiny2DStackLabTests)
+  # Three warm-started 60 s stack runs (28 s measured in Debug); the
+  # AddressSanitizer factor exceeded 3x and timed out at 90, so match the
+  # chaos suite's headroom.
+  set_tests_properties(Tiny2DStackLabTests PROPERTIES TIMEOUT 180)
 endif()

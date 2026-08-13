@@ -44,6 +44,24 @@ void ResolveWindowCollision(Circle& circle, float area_width, float area_height,
                             bool allow_restitution,
                             float restitution_velocity_threshold);
 
+// Split wall resolves for the warm-start contact path: the velocity half
+// runs inside every warm iteration (anchoring stacked chains against the
+// static walls), the snap half once at step end. The combined
+// ResolveWindowCollision above calls both halves per wall in the original
+// order, so the cold path stays bit-identical.
+void ResolveWindowCollisionVelocity(Rectangle& square, float area_width,
+                                    float area_height, float restitution,
+                                    float friction, bool allow_restitution,
+                                    float restitution_velocity_threshold);
+void ResolveWindowCollisionVelocity(Circle& circle, float area_width,
+                                    float area_height, float restitution,
+                                    float friction, bool allow_restitution,
+                                    float restitution_velocity_threshold);
+void ResolveWindowCollisionSnap(Rectangle& square, float area_width,
+                                float area_height);
+void ResolveWindowCollisionSnap(Circle& circle, float area_width,
+                                float area_height);
+
 template <typename Body>
 Vec2 ContactVelocity(const Body& body, Vec2 radius) {
   return Add(body.velocity, Cross(body.angular_velocity, radius));
@@ -150,7 +168,9 @@ template <typename BodyA, typename BodyB>
 void ResolveContact(BodyA& square_a, BodyB& square_b,
                     const ContactManifold& manifold,
                     const ResolvedMaterial& material, bool allow_restitution,
-                    float restitution_velocity_threshold) {
+                    float restitution_velocity_threshold,
+                    float position_slop = kPositionSlop,
+                    float position_correction = kPositionCorrection) {
   const float inverse_mass_a = InverseMass(square_a);
   const float inverse_mass_b = InverseMass(square_b);
   const float inverse_mass_sum = inverse_mass_a + inverse_mass_b;
@@ -200,8 +220,8 @@ void ResolveContact(BodyA& square_a, BodyB& square_b,
   }
 
   const float correction_magnitude =
-      std::max(manifold.penetration - kPositionSlop, 0.0f) *
-      kPositionCorrection / inverse_mass_sum;
+      std::max(manifold.penetration - position_slop, 0.0f) *
+      position_correction / inverse_mass_sum;
   const Vec2 correction = Multiply(manifold.normal, correction_magnitude);
   square_a.position =
       Subtract(square_a.position, Multiply(correction, inverse_mass_a));

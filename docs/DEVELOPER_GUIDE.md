@@ -1,6 +1,6 @@
 # Tiny2D Engine Developer Guide
 
-> Current experiment generation: V19 (unreleased) / Latest release: 2.0.0
+> Current experiment generation: V20 (unreleased) / Latest release: 2.0.0
 > (V10)<br>
 > C++17 · SDL2 · Dear ImGui · CMake + vcpkg
 
@@ -59,6 +59,19 @@ namespace `tiny2d::internal` with no stability guarantee:
   solve (a direct 2x2 block solve per rope coupled to the pulley's angular
   velocity; scalar axial solves per rod), and the full position projection
   that keeps constraint-length drift from accumulating.
+- `warm_contacts.{h,cc}` — the warm-starting accumulated-impulse contact
+  formulation used when a caller passes a `ContactCache`: body-body
+  manifolds detected once per step with stable feature ids (face indices
+  and clip-point ids threaded through the SAT clipping) and a 2%
+  axis-preference hysteresis, deterministic exact-then-pair-fallback
+  impulse matching, warm application completed by a wall velocity anchor,
+  accumulated normal/tangent clamping on a fixed per-manifold tangent
+  basis with the two-point block solve retained, wall-anchored velocity
+  iterations, geometric position passes plus the wall snap, and sorted
+  write-back with stale eviction. The historical cold path (no cache) is
+  untouched and golden-guarded; SolverSettings defaults reproduce its
+  constants bit for bit (ROADMAP §3.2 additive coexistence — migrating
+  the cold path needs its own parity evidence).
 
 ## 3. Engine semantics
 
@@ -110,6 +123,17 @@ namespace `tiny2d::internal` with no stability guarantee:
   tensions. The rope is bilateral (no slack modeling), rods attach at
   centers of mass only, and CCD cannot be combined with constraints; these
   limits are validated, not silent.
+- **Contact solver formulations:** the cold path re-detects contacts and
+  solves per-iteration-clamped impulses every round (historical,
+  bit-identical, golden-guarded); the warm path (opt-in via
+  `ContactCache`) accumulates impulses across steps so resting stacks
+  carry their loads instead of rebuilding them from zero — the measured
+  difference between a 0.227 m/s jitter and exact-zero rest on the
+  ten-box reference. Warm-path limitation (measured): offset stacks
+  stand but wobble at 0.06-0.10 m/s because marginally-clipped tilted
+  interfaces flicker their second manifold point, cold-starting it on
+  every reappearance; the roadmap's persistent-contact-manifolds trigger
+  records the fix path.
 - **Constraint energy limitation (measured):** velocity-projection
   constraint stepping deletes the centripetally rotated axial velocity
   component every step, losing kinetic energy at a rate scaling as
@@ -176,6 +200,7 @@ and `sim_ui.h` (slider-plus-input widgets and arrow drawing).
 | V17 ImpactLab | Discrete vs CCD lanes over one fixed step | Swept-circle entry/exit times, expected post-impact state, per-lane error terms |
 | V18 AtwoodLab | Two hanging blocks on a rope over a pinned massive pulley | a = (m_b - m_a) g / (m_a + m_b + I/R^2), tension pair, no-slip coupling, rope-length drift, energy budget |
 | V19 ChaosLab | Point-mass double pendulum on rod constraints with a shadow run | Small-angle normal modes (2%), 25-degree energy budget, rod drift, factor-1000 divergence from a 1e-4 rad offset |
+| V20 StackLab | Warm-started resting box stacks with live criteria telemetry | Per-interface loads = (n-k) m g (1% time-averaged; 0.000% measured), exact-zero resting speed on the aligned reference, offset stand-without-collapse |
 
 ## 6. Adding a lab
 

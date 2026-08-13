@@ -15,8 +15,15 @@ struct Face {
   Vec2 normal;
 };
 
+// Clip-point ids for warm-start feature matching: 0-3 name the incident
+// vertex a point originated from, 4 + plane names an intersection created
+// by that clip plane, 15 marks the zero-clip support fallback.
+constexpr unsigned kClipIdIntersectionBase = 4;
+constexpr unsigned kClipIdSupportFallback = 15;
+
 struct ClipPoints {
   std::array<Vec2, 2> points{};
+  std::array<unsigned, 2> ids{};
   std::size_t count{};
 };
 
@@ -29,35 +36,36 @@ std::array<Face, 4> GetFaces(const Rectangle& square) {
            {vertices[3], vertices[0], Multiply(axes[0], -1.0f)}}};
 }
 
-Face FindAlignedFace(const Rectangle& square, Vec2 direction) {
-  const std::array<Face, 4> faces = GetFaces(square);
-  Face selected_face = faces.front();
-  float best_alignment = Dot(selected_face.normal, direction);
-  for (const Face& face : faces) {
-    const float alignment = Dot(face.normal, direction);
+std::size_t FindAlignedFaceIndex(const std::array<Face, 4>& faces,
+                                 Vec2 direction) {
+  std::size_t selected = 0;
+  float best_alignment = Dot(faces[0].normal, direction);
+  for (std::size_t i = 0; i < faces.size(); ++i) {
+    const float alignment = Dot(faces[i].normal, direction);
     if (alignment > best_alignment) {
       best_alignment = alignment;
-      selected_face = face;
+      selected = i;
     }
   }
-  return selected_face;
+  return selected;
 }
 
-Face FindOpposingFace(const Rectangle& square, Vec2 direction) {
-  const std::array<Face, 4> faces = GetFaces(square);
-  Face selected_face = faces.front();
-  float best_alignment = Dot(selected_face.normal, direction);
-  for (const Face& face : faces) {
-    const float alignment = Dot(face.normal, direction);
+std::size_t FindOpposingFaceIndex(const std::array<Face, 4>& faces,
+                                  Vec2 direction) {
+  std::size_t selected = 0;
+  float best_alignment = Dot(faces[0].normal, direction);
+  for (std::size_t i = 0; i < faces.size(); ++i) {
+    const float alignment = Dot(faces[i].normal, direction);
     if (alignment < best_alignment) {
       best_alignment = alignment;
-      selected_face = face;
+      selected = i;
     }
   }
-  return selected_face;
+  return selected;
 }
 
-ClipPoints ClipToPlane(const ClipPoints& input, Vec2 normal, float offset) {
+ClipPoints ClipToPlane(const ClipPoints& input, Vec2 normal, float offset,
+                       unsigned plane_index) {
   ClipPoints output;
   if (input.count == 0) {
     return output;
@@ -65,6 +73,7 @@ ClipPoints ClipToPlane(const ClipPoints& input, Vec2 normal, float offset) {
   if (input.count == 1) {
     if (Dot(input.points[0], normal) <= offset) {
       output.points[0] = input.points[0];
+      output.ids[0] = input.ids[0];
       output.count = 1;
     }
     return output;
@@ -75,13 +84,16 @@ ClipPoints ClipToPlane(const ClipPoints& input, Vec2 normal, float offset) {
   const bool inside_a = distance_a <= 0.0f;
   const bool inside_b = distance_b <= 0.0f;
   if (inside_a) {
+    output.ids[output.count] = input.ids[0];
     output.points[output.count++] = input.points[0];
   }
   if (inside_b) {
+    output.ids[output.count] = input.ids[1];
     output.points[output.count++] = input.points[1];
   }
   if (inside_a != inside_b) {
     const float parameter = distance_a / (distance_a - distance_b);
+    output.ids[output.count] = kClipIdIntersectionBase + plane_index;
     output.points[output.count++] =
         Add(input.points[0],
             Multiply(Subtract(input.points[1], input.points[0]), parameter));
@@ -171,12 +183,19 @@ SupportFeature FindSupportFeature(const std::array<Vec2, 4>& vertices,
 }
 
 std::optional<ContactManifold> FindContact(const Rectangle& square_a,
-                                           const Rectangle& square_b) {
+                                           const Rectangle& square_b,
+                                           bool prefer_stable_axis) {
   const std::array<Vec2, 4> vertices_a = GetVerticesUnchecked(square_a);
   const std::array<Vec2, 4> vertices_b = GetVerticesUnchecked(square_b);
   const std::array<Vec2, 2> axes_a = GetAxes(square_a);
   const std::array<Vec2, 2> axes_b = GetAxes(square_b);
   const std::array<Vec2, 4> axes = {axes_a[0], axes_a[1], axes_b[0], axes_b[1]};
+
+  // With prefer_stable_axis, a later candidate must beat the current best
+  // by a 2% relative margin: near-tied vertical axes in a stack would
+  // otherwise flip the reference body step to step and defeat warm-start
+  // matching.
+  constexpr float kAxisPreferenceRatio = 0.98f;
 
   float minimum_overlap = std::numeric_limits<float>::infinity();
   Vec2 collision_normal{};
@@ -191,7 +210,10 @@ std::optional<ContactManifold> FindContact(const Rectangle& square_a,
     if (overlap <= 0.0f) {
       return std::nullopt;
     }
-    if (overlap < minimum_overlap) {
+    const bool wins = prefer_stable_axis
+                          ? overlap < kAxisPreferenceRatio * minimum_overlap
+                          : overlap < minimum_overlap;
+    if (wins) {
       minimum_overlap = overlap;
       collision_normal = axis;
       reference_is_a = i < axes_a.size();
@@ -207,10 +229,19 @@ std::optional<ContactManifold> FindContact(const Rectangle& square_a,
   const Rectangle& incident_square = reference_is_a ? square_b : square_a;
   const Vec2 reference_direction =
       reference_is_a ? collision_normal : Multiply(collision_normal, -1.0f);
-  const Face reference_face =
-      FindAlignedFace(reference_square, reference_direction);
-  const Face incident_face =
-      FindOpposingFace(incident_square, reference_face.normal);
+  const std::array<Face, 4> reference_faces = GetFaces(reference_square);
+  const std::array<Face, 4> incident_faces = GetFaces(incident_square);
+  const std::size_t reference_face_index =
+      FindAlignedFaceIndex(reference_faces, reference_direction);
+  const Face& reference_face = reference_faces[reference_face_index];
+  const std::size_t incident_face_index =
+      FindOpposingFaceIndex(incident_faces, reference_face.normal);
+  const Face& incident_face = incident_faces[incident_face_index];
+
+  const auto make_point_id = [&](unsigned clip_id) {
+    return (reference_is_a ? 0x80u : 0u) |
+           (static_cast<unsigned>(reference_face_index) << 4) | clip_id;
+  };
 
   const Vec2 tangent =
       Normalize(Subtract(reference_face.end, reference_face.start));
@@ -218,17 +249,22 @@ std::optional<ContactManifold> FindContact(const Rectangle& square_a,
                                          Dot(reference_face.end, tangent));
   const float maximum_tangent = std::max(Dot(reference_face.start, tangent),
                                          Dot(reference_face.end, tangent));
-  ClipPoints clipped{{incident_face.start, incident_face.end}, 2};
-  clipped = ClipToPlane(clipped, Multiply(tangent, -1.0f), -minimum_tangent);
-  clipped = ClipToPlane(clipped, tangent, maximum_tangent);
+  // Incident face k runs from vertex k to vertex (k + 1) % 4.
+  ClipPoints clipped{{incident_face.start, incident_face.end},
+                     {static_cast<unsigned>(incident_face_index),
+                      static_cast<unsigned>((incident_face_index + 1) % 4)},
+                     2};
+  clipped = ClipToPlane(clipped, Multiply(tangent, -1.0f), -minimum_tangent, 0);
+  clipped = ClipToPlane(clipped, tangent, maximum_tangent, 1);
 
-  ContactManifold manifold{collision_normal, {}, 0, minimum_overlap};
+  ContactManifold manifold{collision_normal, {}, 0, minimum_overlap, {}};
   const float reference_offset =
       Dot(reference_face.start, reference_face.normal);
   for (std::size_t i = 0; i < clipped.count; ++i) {
     const float separation =
         Dot(clipped.points[i], reference_face.normal) - reference_offset;
     if (separation <= kSupportEpsilon) {
+      manifold.point_ids[manifold.point_count] = make_point_id(clipped.ids[i]);
       manifold.points[manifold.point_count++] =
           Subtract(clipped.points[i],
                    Multiply(reference_face.normal, separation * 0.5f));
@@ -240,6 +276,7 @@ std::optional<ContactManifold> FindContact(const Rectangle& square_a,
         FindSupportFeature(vertices_a, collision_normal, true);
     const SupportFeature feature_b =
         FindSupportFeature(vertices_b, collision_normal, false);
+    manifold.point_ids[0] = make_point_id(kClipIdSupportFallback);
     manifold.points[0] =
         GetContactPoint(feature_a, feature_b, collision_normal);
     manifold.point_count = 1;
