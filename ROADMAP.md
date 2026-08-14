@@ -3,7 +3,7 @@
 - **Document status:** Proposal
 - **Project baseline:** V14 development line, based on the 2.0 release
 - **Target milestone:** Tiny2D Physics Lab 3.0
-- **Last updated:** 2026-08-11 (V20 delivered)
+- **Last updated:** 2026-08-15 (V21 delivered)
 
 ## 1. Purpose
 
@@ -93,6 +93,20 @@ The current development line contains ten independent experiment families:
   `TestCollapsePresetStaysFiniteAndDeterministic`). Offset stacks stand
   without collapse (the cold solver toppled them) but wobble within a
   documented limitation below.
+- **V21 versioned CSV export (delivered):** the first §12 measurement
+  capability. A shared UI-free writer (`Sandbox/csv_export.h/.cc`,
+  tiny2d-csv format 1) emits metadata comment lines — product version
+  from the vcpkg -> CMake single source, model identifier, every input
+  parameter by field name, and the run state at export time (the §12
+  "terminal status" for a live lab) — followed by rows keyed on each
+  sample's stored time. StackLab and ChaosLab are the two consumers
+  (§3.4 threshold): each monitor gained an Export CSV button writing
+  `<slug>_<timestamp>.csv` with collision-safe suffixes. Evidence: the
+  `Tiny2DCsvExportTests` suite (escaping, round-trip numeric formats,
+  rejection atomicity, file round-trip) plus
+  `TestCsvExportMetadataAndRows` in both lab suites (non-uniform
+  stored-time reproduction, complete parameter lists, byte-identical
+  determinism).
 
 The reusable engine provides rotating rectangular and circular bodies, SAT
 collision detection, one- and two-point contact manifolds with stable
@@ -139,7 +153,9 @@ The main limitations relevant to this roadmap are:
   factor, and offset amplitude; pair-fallback matching does not remove
   it). The recorded fix path is the §14 persistent-contact-manifolds
   trigger;
-- no time-series plotting, data export, or experiment file format;
+- no time-series plotting, history cursors, or experiment file format;
+  CSV export (delivered in V21) covers StackLab and ChaosLab, and the
+  other labs adopt the shared writer as they are next touched;
 - no sleeping system (deliberately: a sleep threshold above the resting
   criterion would mask rather than solve).
 
@@ -394,7 +410,10 @@ The project SHOULD progressively add:
 - two history cursors and differences such as $\Delta t$, $\Delta x$,
   $\Delta v$, and $\Delta E$;
 - CSV export with real time, SI units, model identifier, product version,
-  complete input parameters, and terminal status;
+  complete input parameters, and terminal status — **delivered in V21**
+  for StackLab and ChaosLab (tiny2d-csv format 1; "terminal status" is
+  recorded as the run state at export time, the only sensible reading
+  for a live lab);
 - a versioned experiment file for save, load, and deterministic replay;
 - analytical value, simulated value, absolute error, and relative error;
 - event markers for collisions, rolling transition, loss of contact,
@@ -472,11 +491,14 @@ The project is ready for a formal 3.0 release when:
 
 ## 17. Recommended Next Action
 
-V15 through V20 are delivered (see §2), completing the §4 feature table.
-The next work SHOULD target the **Physics Lab 3.0 release gate** (§16):
-the §12 measurement capabilities (time-series plotting, CSV export, the
-versioned experiment file), packaging a Windows distribution that runs on
-a clean machine, release-version consistency across CMake, vcpkg, the
-window title, tag, and changelog, and an explicit license with release
-checksums. That work should be proposed and reviewed with the same
-contract-first discipline used by V15-V20.
+V15 through V21 are delivered (see §2); the §4 feature table is complete
+and the first §12 measurement capability (versioned CSV export) has
+landed. The next work SHOULD continue toward the **Physics Lab 3.0
+release gate** (§16): the remaining §12 capabilities (time-series
+plotting with existing ImGui facilities, history cursors, the versioned
+experiment file, export coverage for the remaining labs), packaging a
+Windows distribution that runs on a clean machine, release-version
+consistency across CMake, vcpkg, the window title, tag, and changelog,
+and an explicit license with release checksums. That work should be
+proposed and reviewed with the same contract-first discipline used by
+V15-V21.

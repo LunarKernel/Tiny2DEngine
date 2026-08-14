@@ -5,7 +5,11 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
+
+#include "csv_export.h"
 
 namespace tiny2d::sandbox {
 namespace {
@@ -501,6 +505,80 @@ const ChaosState* FindChaosState(const std::vector<ChaosState>& history,
                  next->time_seconds - time_seconds
              ? &*previous
              : &*next;
+}
+
+std::string BuildChaosCsv(const ChaosConfig& config,
+                          const std::vector<ChaosState>& history,
+                          const std::string& product_version,
+                          const std::string& status) {
+  if (const char* error = GetChaosConfigError(config)) {
+    throw std::invalid_argument(error);
+  }
+
+  CsvMetadata metadata;
+  metadata.model_id = "V19 ChaosLab";
+  metadata.product_version = product_version;
+  metadata.parameters = {
+      {"mass_1_kg", CsvFloat(config.mass_1_kg)},
+      {"mass_2_kg", CsvFloat(config.mass_2_kg)},
+      {"length_1_m", CsvFloat(config.length_1_m)},
+      {"length_2_m", CsvFloat(config.length_2_m)},
+      {"bob_radius_m", CsvFloat(config.bob_radius_m)},
+      {"initial_angle_1_deg", CsvFloat(config.initial_angle_1_deg)},
+      {"initial_angle_2_deg", CsvFloat(config.initial_angle_2_deg)},
+      {"initial_angular_velocity_1_rad_s",
+       CsvFloat(config.initial_angular_velocity_1_rad_s)},
+      {"initial_angular_velocity_2_rad_s",
+       CsvFloat(config.initial_angular_velocity_2_rad_s)},
+      {"gravity_m_s2", CsvFloat(config.gravity_m_s2)},
+      {"linear_damping_per_s", CsvFloat(config.linear_damping_per_s)},
+      {"shadow_offset_rad", CsvFloat(config.shadow_offset_rad)},
+  };
+  metadata.status = status;
+
+  const std::vector<std::string> columns = {
+      "time_s",
+      "theta_1_rad",
+      "theta_2_rad",
+      "omega_1_rad_s",
+      "omega_2_rad_s",
+      "rod_1_length_error_m",
+      "rod_2_length_error_m",
+      "kinetic_energy_j",
+      "potential_energy_j",
+      "mechanical_energy_j",
+      "dissipated_energy_j",
+      "accounted_energy_j",
+      "separation_rad",
+      "separation_decades",
+      "anchor_rod_force_n",
+      "link_rod_force_n",
+  };
+
+  std::vector<std::vector<std::string>> rows;
+  rows.reserve(history.size());
+  for (const ChaosState& state : history) {
+    const ChaosDerived derived = CalculateChaosDerived(config, state);
+    rows.push_back({
+        CsvDouble(state.time_seconds),
+        CsvDouble(derived.theta_1_rad),
+        CsvDouble(derived.theta_2_rad),
+        CsvDouble(derived.omega_1_rad_s),
+        CsvDouble(derived.omega_2_rad_s),
+        CsvDouble(derived.rod_1_length_error_m),
+        CsvDouble(derived.rod_2_length_error_m),
+        CsvDouble(derived.kinetic_energy_j),
+        CsvDouble(derived.potential_energy_j),
+        CsvDouble(derived.mechanical_energy_j),
+        CsvDouble(state.dissipated_energy_j),
+        CsvDouble(derived.accounted_energy_j),
+        CsvDouble(derived.separation_rad),
+        CsvDouble(derived.separation_decades),
+        CsvFloat(state.anchor_rod_force_n),
+        CsvFloat(state.link_rod_force_n),
+    });
+  }
+  return BuildCsv(metadata, columns, rows);
 }
 
 }  // namespace tiny2d::sandbox

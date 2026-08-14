@@ -8,6 +8,22 @@ not product versions.
 
 ### Added
 
+- V21 versioned CSV export: a shared UI-free writer
+  (`Sandbox/csv_export`, tiny2d-csv format 1) with RFC-4180 escaping,
+  round-trip numeric formatting (9 significant digits for floats, 17
+  for doubles), and metadata comment lines carrying the product
+  version, model identifier, complete input parameters, and the run
+  state at export time. StackLab and ChaosLab monitors gained an
+  Export CSV button writing `<slug>_<timestamp>.csv` into the working
+  directory with collision-safe `_<n>` suffixes; rows are keyed on
+  each sample's stored time, never a uniform index interval.
+- Engine hardening from the V20 review's deferred notes: worlds using
+  a contact cache are validated to at most 2^20 bodies per shape kind
+  (the cache key packs 20-bit body indices; a larger index would have
+  silently corrupted keys), with the limit documented on the
+  `ContactCache` lifecycle contract and regression-tested; the
+  StackLab interface-load fixed-step division and energy-scale choice
+  are now documented in place.
 - V20 StackLab: a ten-box stack that truly rests through the engine's
   new warm-starting contact solver, with live ROADMAP §11 criteria,
   per-interface load telemetry validated against Newtonian statics

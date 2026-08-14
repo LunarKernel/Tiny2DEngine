@@ -2463,6 +2463,40 @@ void TestSolverSettingsAndCacheRejectInvalidInput() {
   expect_reject([](tiny2d::SolverSettings&, tiny2d::ContactCache&, bool& ccd) {
     ccd = true;  // CCD cannot combine with a cache.
   });
+
+  // Cache keys hold 20 bits per body index, so a cached world above
+  // 2^20 bodies of one shape kind must be rejected before any key is
+  // packed (the overflow would silently corrupt the kind bit). The
+  // bodies need not be individually valid: the bound check fires before
+  // per-body validation, and atomicity is spot-checked on sentinels
+  // instead of an 80 MB snapshot.
+  const auto expect_size_reject = [](std::size_t rectangle_count,
+                                     std::size_t circle_count) {
+    std::vector<tiny2d::Rectangle> rectangles(rectangle_count);
+    std::vector<tiny2d::Circle> circles(circle_count);
+    tiny2d::ContactCache cache;
+    cache.entries = {{100ull, 1.0f, 0.5f}};
+    bool threw = false;
+    try {
+      tiny2d::Update(rectangles, circles, tiny2d::ConstraintSet{},
+                     tiny2d::SolverSettings{}, &cache, 1.0f / 480.0f, 100.0f,
+                     100.0f, 0.0f, 0.6f, {}, 9.81f, 20.0f, false, nullptr);
+    } catch (const std::invalid_argument&) {
+      threw = true;
+    }
+    CHECK(threw);
+    CHECK(rectangles.size() == rectangle_count);
+    CHECK(circles.size() == circle_count);
+    if (!rectangles.empty()) {
+      CHECK(SameRectangle(rectangles.front(), tiny2d::Rectangle{}));
+      CHECK(SameRectangle(rectangles.back(), tiny2d::Rectangle{}));
+    }
+    CHECK(cache.entries.size() == 1);
+    CHECK(cache.entries[0].key == 100ull);
+    CHECK(cache.entries[0].normal_impulse == 1.0f);
+  };
+  expect_size_reject((1u << 20) + 1, 0);
+  expect_size_reject(0, (1u << 20) + 1);
 }
 
 void TestWarmCacheKeysStayDistinctAcrossPairKinds() {

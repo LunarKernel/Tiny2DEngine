@@ -1,6 +1,6 @@
 # Tiny2D Engine Developer Guide
 
-> Current experiment generation: V20 (unreleased) / Latest release: 2.0.0
+> Current experiment generation: V21 (unreleased) / Latest release: 2.0.0
 > (V10)<br>
 > C++17 · SDL2 · Dear ImGui · CMake + vcpkg
 
@@ -185,7 +185,29 @@ single-step evidence loop with replay) build directly on
 
 Shared utilities: `fixed_step_clock.h` (frame-time accumulation into fixed
 physics steps), `simulation_history.h` (bounded, decimating history append),
-and `sim_ui.h` (slider-plus-input widgets and arrow drawing).
+and `sim_ui.h` (slider-plus-input widgets, arrow drawing, and the
+CSV-export-to-working-directory helper).
+
+### CSV export (tiny2d-csv format 1)
+
+`Sandbox/csv_export.{h,cc}` is the shared, UI-free export writer
+(ROADMAP §12): `BuildCsv` emits `#`-prefixed metadata lines — the format
+version, the product version (single-sourced from `vcpkg.json` through
+CMake's `TINY2D_PRODUCT_VERSION`), the model identifier, one
+`# param <field>: <value>` line per config field, and a status line
+recording the run state at export time (the §12 "terminal status" for a
+live lab) — then a header row and one row per history sample. Fields are
+RFC-4180 escaped; floats print with 9 significant digits and doubles
+with 17, so every value round-trips exactly. The time column is each
+sample's stored time, never a uniform index interval. Rejection is
+atomic (`std::invalid_argument`, no partial output) and output is
+deterministic (equal inputs give equal bytes).
+
+Model-layer entry points `BuildStackCsv` and `BuildChaosCsv` are the two
+consumers (§3.4 threshold); each lab monitor's Export CSV button writes
+`<slug>_<yyyymmdd_hhmmss>.csv` into the process working directory,
+appending an `_<n>` attempt suffix instead of overwriting on a
+collision. Labs touched in the future should adopt the same writer.
 
 ## 5. The experiments
 
@@ -201,6 +223,10 @@ and `sim_ui.h` (slider-plus-input widgets and arrow drawing).
 | V18 AtwoodLab | Two hanging blocks on a rope over a pinned massive pulley | a = (m_b - m_a) g / (m_a + m_b + I/R^2), tension pair, no-slip coupling, rope-length drift, energy budget |
 | V19 ChaosLab | Point-mass double pendulum on rod constraints with a shadow run | Small-angle normal modes (2%), 25-degree energy budget, rod drift, factor-1000 divergence from a 1e-4 rad offset |
 | V20 StackLab | Warm-started resting box stacks with live criteria telemetry | Per-interface loads = (n-k) m g (1% time-averaged; 0.000% measured), exact-zero resting speed on the aligned reference, offset stand-without-collapse |
+
+V21 is a cross-cutting measurement generation, not a lab: versioned CSV
+export (see section 4) for the StackLab and ChaosLab monitors, plus the
+engine's 2^20 cached-body bound from the V20 review's deferred notes.
 
 ## 6. Adding a lab
 
@@ -231,6 +257,7 @@ before pushing.
 ## 8. Versioning
 
 `version-semver` in `vcpkg.json` is the single source of the product
-version; CMake and the window title derive from it. V-numbers (V9…V17) name
-experiment generations and never become semantic versions. Releases tag
+version; CMake and the window title derive from it, and CSV exports
+record it in their metadata. V-numbers (V9 through V21) name experiment
+generations and never become semantic versions. Releases tag
 `v<version-semver>` and update `CHANGELOG.md`.

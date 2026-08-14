@@ -302,6 +302,10 @@ void Update(std::vector<Rectangle>& rectangles, std::vector<Circle>& circles,
   ValidateSolverSettings(solver_settings);
   if (contact_cache != nullptr) {
     ValidateContactCache(*contact_cache);
+    // Warm-start cache keys pack each body index into 20 bits beside a
+    // shape-kind bit; a larger index would silently corrupt the keys.
+    Require(rectangles.size() <= (1ull << 20) && circles.size() <= (1ull << 20),
+            "A contact cache supports at most 2^20 bodies per shape kind.");
   }
   ValidateConstraints(rectangles, circles, constraints, area_width,
                       area_height);

@@ -5,8 +5,45 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ctime>
+#include <filesystem>
+#include <string>
+
+#include "csv_export.h"
 
 namespace tiny2d::sandbox::ui {
+
+// Writes a lab's CSV export into the process working directory as
+// <slug>_<local timestamp>.csv, appending an _<n> attempt suffix
+// instead of overwriting on a name collision. Returns a one-line
+// status for the monitor: the written name on success, otherwise the
+// failure reason.
+inline std::string ExportCsvToWorkingDirectory(const std::string& slug,
+                                               const std::string& csv) {
+  const std::time_t now = std::time(nullptr);
+  std::tm local_time{};
+#ifdef _WIN32
+  const bool have_local_time = localtime_s(&local_time, &now) == 0;
+#else
+  const bool have_local_time = localtime_r(&now, &local_time) != nullptr;
+#endif
+  char stamp[20];
+  if (!have_local_time ||
+      std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &local_time) == 0) {
+    return "Export failed: local time unavailable.";
+  }
+  std::string name;
+  int attempt = 1;
+  do {
+    name = MakeCsvFileName(slug, stamp, attempt++);
+  } while (std::filesystem::exists(std::filesystem::path(name)) &&
+           attempt <= 99);
+  std::string error;
+  if (!WriteTextFile(name, csv, &error)) {
+    return "Export failed: " + error;
+  }
+  return "Exported " + name;
+}
 
 inline bool SliderInputFloat(const char* label, float* value, float minimum,
                              float maximum, const char* format,

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -174,8 +175,8 @@ void DrawCriterion(const char* label, bool ok, double value, const char* unit) {
 bool DrawMonitor(const StackConfig& config, const StackState& current_state,
                  const std::vector<StackState>& history, bool* paused,
                  double* inspect_time, bool* follow_live,
-                 const std::string& runtime_error,
-                 StackState* displayed_state) {
+                 const std::string& runtime_error, StackState* displayed_state,
+                 std::string* export_status) {
   ImGui::SetNextWindowPos({12.0f, 12.0f});
   ImGui::SetNextWindowSize({430.0f, 760.0f});
   constexpr ImGuiWindowFlags kWindowFlags =
@@ -278,6 +279,36 @@ bool DrawMonitor(const StackConfig& config, const StackState& current_state,
   ImGui::EndDisabled();
   ImGui::SameLine();
   const bool stop = ImGui::Button("Stop and choose model", {width, 36.0f});
+
+  ImGui::BeginDisabled(history.empty());
+  if (ImGui::Button("Export CSV", {ImGui::GetContentRegionAvail().x, 30.0f})) {
+    try {
+      const StackDerived live = CalculateStackDerived(config, current_state);
+      const int criteria_passing =
+          (live.penetration_ok ? 1 : 0) + (live.resting_speed_ok ? 1 : 0) +
+          (live.drift_ok ? 1 : 0) + (live.energy_ok ? 1 : 0) +
+          (live.height_ok ? 1 : 0);
+      char status[64];
+      std::snprintf(
+          status, sizeof(status), "%s t=%.4f s | criteria %d/5",
+          runtime_error.empty() ? (*paused ? "PAUSED" : "RUNNING") : "ERROR",
+          current_state.time_seconds, criteria_passing);
+      std::string full_status = status;
+      if (!runtime_error.empty()) {
+        full_status += " | " + runtime_error;
+      }
+      *export_status = ui::ExportCsvToWorkingDirectory(
+          "stack_lab",
+          BuildStackCsv(config, history, TINY2D_PRODUCT_VERSION, full_status));
+    } catch (const std::exception& exception) {
+      *export_status = std::string("Export failed: ") + exception.what();
+    }
+  }
+  ImGui::EndDisabled();
+  if (!export_status->empty()) {
+    ImGui::TextWrapped("%s", export_status->c_str());
+  }
+
   ImGui::End();
   return stop;
 }
@@ -316,11 +347,15 @@ struct StackLabTraits {
                  double* inspect_time, bool* follow_live,
                  const std::string& error) {
     State displayed_state = state;
-    const bool stop = DrawMonitor(config, state, history, paused, inspect_time,
-                                  follow_live, error, &displayed_state);
+    const bool stop =
+        DrawMonitor(config, state, history, paused, inspect_time, follow_live,
+                    error, &displayed_state, &export_status_);
     DrawStackScene(config, displayed_state);
     return stop;
   }
+
+  // Result line of the last Export CSV click; persists across frames.
+  std::string export_status_;
 };
 
 }  // namespace

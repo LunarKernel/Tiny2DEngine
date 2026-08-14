@@ -5,7 +5,11 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
+
+#include "csv_export.h"
 
 namespace tiny2d::sandbox {
 namespace {
@@ -128,6 +132,9 @@ StackDerived CalculateDerivedUnchecked(const StackConfig& config,
     const int index_a = static_cast<int>((entry.key >> 29) & 0x1FFFFF);
     const int index_b = static_cast<int>((entry.key >> 8) & 0x1FFFFF);
     if (index_b == index_a + 1 && index_a < count - 1) {
+      // Loads divide the cached impulses by the fixed kStackPhysicsStep:
+      // exact for the shell's fixed-step stepping, approximate for a
+      // direct consumer stepping a partial delta_time.
       derived.interface_loads_n[static_cast<std::size_t>(index_a)] +=
           entry.normal_impulse / kStackPhysicsStep;
     }
@@ -141,7 +148,9 @@ StackDerived CalculateDerivedUnchecked(const StackConfig& config,
   derived.drift_ok = state.drift_reference_positions.empty() ||
                      derived.max_drift_m < 0.001 * edge;
   // Energy must never exceed the initial value by more than 0.1% of the
-  // energy scale (initial-rest run: the scale floors at 1 J).
+  // energy scale. The runtime scale is max(1 J, |PE released|) so the
+  // criterion stays meaningful after large settling; the reference test
+  // additionally binds the strict 1 J floor where it matters.
   derived.energy_ok =
       derived.mechanical_energy_j <=
       0.001 * std::max(1.0, std::abs(derived.potential_energy_j));
@@ -316,6 +325,75 @@ bool StepStack(const StackConfig& config, float delta_time, StackState* state) {
   }
   *state = next;
   return true;
+}
+
+std::string BuildStackCsv(const StackConfig& config,
+                          const std::vector<StackState>& history,
+                          const std::string& product_version,
+                          const std::string& status) {
+  if (const char* error = GetStackConfigError(config)) {
+    throw std::invalid_argument(error);
+  }
+
+  CsvMetadata metadata;
+  metadata.model_id = "V20 StackLab";
+  metadata.product_version = product_version;
+  metadata.parameters = {
+      {"box_count", std::to_string(config.box_count)},
+      {"box_edge_m", CsvFloat(config.box_edge_m)},
+      {"box_mass_kg", CsvFloat(config.box_mass_kg)},
+      {"friction", CsvFloat(config.friction)},
+      {"gravity_m_s2", CsvFloat(config.gravity_m_s2)},
+      {"lateral_offset_m", CsvFloat(config.lateral_offset_m)},
+  };
+  metadata.status = status;
+
+  std::vector<std::string> columns = {
+      "time_s",
+      "max_penetration_m",
+      "max_penetration_fraction",
+      "max_speed_mps",
+      "mean_speed_mps",
+      "max_angular_speed_rad_s",
+      "max_tilt_rad",
+      "max_drift_m",
+      "kinetic_energy_j",
+      "potential_energy_j",
+      "mechanical_energy_j",
+      "stack_height_error_m",
+      "cache_contact_count",
+      "cache_warm_started_count",
+  };
+  for (int i = 0; i + 1 < config.box_count; ++i) {
+    columns.push_back("interface_load_" + std::to_string(i) + "_n");
+  }
+
+  std::vector<std::vector<std::string>> rows;
+  rows.reserve(history.size());
+  for (const StackState& state : history) {
+    const StackDerived derived = CalculateStackDerived(config, state);
+    std::vector<std::string> row = {
+        CsvDouble(state.time_seconds),
+        CsvDouble(derived.max_penetration_m),
+        CsvDouble(derived.max_penetration_fraction),
+        CsvDouble(derived.max_speed_mps),
+        CsvDouble(derived.mean_speed_mps),
+        CsvDouble(derived.max_angular_speed_rad_s),
+        CsvDouble(derived.max_tilt_rad),
+        CsvDouble(derived.max_drift_m),
+        CsvDouble(derived.kinetic_energy_j),
+        CsvDouble(derived.potential_energy_j),
+        CsvDouble(derived.mechanical_energy_j),
+        CsvDouble(derived.stack_height_error_m),
+        std::to_string(derived.cache_contact_count),
+        std::to_string(derived.cache_warm_started_count),
+    };
+    for (const double load : derived.interface_loads_n) {
+      row.push_back(CsvDouble(load));
+    }
+    rows.push_back(std::move(row));
+  }
+  return BuildCsv(metadata, columns, rows);
 }
 
 const StackState* FindStackState(const std::vector<StackState>& history,

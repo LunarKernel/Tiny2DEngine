@@ -5,6 +5,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "chaos_lab_model.h"
@@ -13,6 +14,7 @@
 namespace {
 
 using tiny2d::Circle;
+using tiny2d::sandbox::BuildChaosCsv;
 using tiny2d::sandbox::CalculateChaosDerived;
 using tiny2d::sandbox::ChaosConfig;
 using tiny2d::sandbox::ChaosDerived;
@@ -345,6 +347,79 @@ void TestValidationAndFailureAtomicity() {
   CHECK(GetChaosStateError(config, stretched) != nullptr);
 }
 
+void TestCsvExportMetadataAndRows() {
+  const ChaosConfig config = MakeChaosReferenceConfig();
+  ChaosState state = MakeInitialChaosState(config);
+  // A deliberately non-uniform history: the time column must reproduce
+  // each sample's stored time, never a uniform index interval.
+  std::vector<ChaosState> history;
+  history.push_back(state);
+  for (int step = 1; step <= 96; ++step) {
+    CHECK(StepChaos(config, kChaosPhysicsStep, &state));
+    if (step == 5 || step == 41 || step == 96) {
+      history.push_back(state);
+    }
+  }
+
+  const std::string csv =
+      BuildChaosCsv(config, history, "9.9.9-test", "UNIT TEST");
+  CHECK(BuildChaosCsv(config, history, "9.9.9-test", "UNIT TEST") == csv);
+
+  std::vector<std::string> lines;
+  std::size_t start = 0;
+  while (start < csv.size()) {
+    const std::size_t end = csv.find('\n', start);
+    lines.push_back(csv.substr(start, end - start));
+    start = end + 1;
+  }
+  // 16 metadata lines (3 fixed + 12 params + status), the header, and
+  // one row per sample.
+  CHECK(lines.size() == 17 + history.size());
+  CHECK(lines[0] == "# tiny2d-csv 1");
+  CHECK(lines[1] == "# product_version: 9.9.9-test");
+  CHECK(lines[2] == "# model: V19 ChaosLab");
+  CHECK(lines[3] == "# param mass_1_kg: 1");
+  CHECK(lines[7] == "# param bob_radius_m: 0.0500000007");
+  CHECK(lines[8] == "# param initial_angle_1_deg: 120");
+  CHECK(lines[14] == "# param shadow_offset_rad: 9.99999975e-05");
+  CHECK(lines[15] == "# status: UNIT TEST");
+
+  const std::string& header = lines[16];
+  CHECK(header ==
+        "time_s,theta_1_rad,theta_2_rad,omega_1_rad_s,omega_2_rad_s,"
+        "rod_1_length_error_m,rod_2_length_error_m,kinetic_energy_j,"
+        "potential_energy_j,mechanical_energy_j,dissipated_energy_j,"
+        "accounted_energy_j,separation_rad,separation_decades,"
+        "anchor_rod_force_n,link_rod_force_n");
+  const auto count_cells = [](const std::string& line) {
+    std::size_t cells = 1;
+    for (const char character : line) {
+      if (character == ',') {
+        ++cells;
+      }
+    }
+    return cells;
+  };
+  for (std::size_t i = 0; i < history.size(); ++i) {
+    const std::string& row = lines[17 + i];
+    CHECK(count_cells(row) == 16);
+    // The first cell round-trips the sample's exact stored time.
+    const double parsed = std::strtod(row.c_str(), nullptr);
+    CHECK(parsed == history[i].time_seconds);
+  }
+
+  // Invalid inputs reject atomically through the existing validation.
+  bool threw = false;
+  try {
+    ChaosConfig bad = config;
+    bad.mass_1_kg = -1.0f;
+    BuildChaosCsv(bad, history, "9.9.9-test", "status");
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
 void TestHistoryLookup() {
   const ChaosConfig config = MakeChaosReferenceConfig();
   std::vector<ChaosState> history;
@@ -387,6 +462,7 @@ int main() {
       NamedTest{"chaotic divergence", TestChaoticDivergence},
       NamedTest{"validation and failure atomicity",
                 TestValidationAndFailureAtomicity},
+      NamedTest{"csv export metadata and rows", TestCsvExportMetadataAndRows},
       NamedTest{"history lookup", TestHistoryLookup},
   };
   for (const NamedTest& test : tests) {

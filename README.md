@@ -1,6 +1,6 @@
 # Tiny2D Engine
 
-> Product version: 2.0.0 / Latest experiment generation: V20 (unreleased)<br>
+> Product version: 2.0.0 / Latest generation: V21 (unreleased)<br>
 > Language: C++17 · Graphics: SDL2 · UI: Dear ImGui · Build: CMake + vcpkg
 
 Tiny2D Engine is a small two-dimensional physics laboratory aimed at rigid
@@ -11,7 +11,7 @@ telemetry, history inspection, and quantities that can be checked against
 analytical solutions.
 
 Two numbering schemes coexist: `2.0.0` is the semantic product version
-(single-sourced from `vcpkg.json`); `V9` through `V20` are experiment
+(single-sourced from `vcpkg.json`); `V9` through `V21` are experiment
 generation codes, not product versions.
 
 ## Experiments
@@ -28,6 +28,12 @@ generation codes, not product versions.
 | V18 AtwoodLab | Massive pulley and rope constraints validated against the analytical Atwood acceleration |
 | V19 ChaosLab | Double pendulum on rod constraints with normal-mode anchors and shadow-run divergence |
 | V20 StackLab | Warm-started box stacks that truly rest, with per-interface loads validated against statics |
+
+V21 adds versioned CSV export (tiny2d-csv format 1) to the StackLab and
+ChaosLab monitors: metadata records the product version, model, complete
+input parameters, and run state, and rows reproduce each history
+sample's stored time. The remaining labs adopt the shared writer as they
+are next touched.
 
 ## Build and test
 

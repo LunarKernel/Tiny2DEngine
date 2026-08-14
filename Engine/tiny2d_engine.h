@@ -295,8 +295,10 @@ struct SolverSettings {
 // stacks truly rest. Entries are engine-owned data; callers construct,
 // keep, and clear the cache but never edit entries. CALLERS MUST CLEAR
 // the cache whenever bodies are inserted, removed, or reordered; keys
-// pack body indices and would silently retarget otherwise. A zero
-// delta_time call leaves the cache untouched.
+// pack body indices and would silently retarget otherwise. Keys hold
+// 20 bits per body index, so cached worlds are validated to at most
+// 2^20 bodies per shape kind. A zero delta_time call leaves the cache
+// untouched.
 struct ContactCache {
   struct Entry {
     // Identifies one body-body contact point across steps: the two body

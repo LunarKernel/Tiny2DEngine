@@ -67,6 +67,7 @@ if(TINY2D_BUILD_SANDBOX OR BUILD_TESTING)
       Sandbox/atwood_lab_model.cc
       Sandbox/chaos_lab_model.cc
       Sandbox/contact_lab_model.cc
+      Sandbox/csv_export.cc
       Sandbox/force_lab_model.cc
       Sandbox/impact_lab_model.cc
       Sandbox/incline_spring_model.cc
@@ -233,6 +234,17 @@ if(BUILD_TESTING)
   # runs (53 s measured in Debug), so it needs far more headroom than the
   # other suites, especially under AddressSanitizer.
   set_tests_properties(Tiny2DChaosLabTests PROPERTIES TIMEOUT 180)
+
+  add_executable(Tiny2DCsvExportTests
+      Sandbox/csv_export_test.cc
+  )
+
+  target_link_libraries(Tiny2DCsvExportTests PRIVATE Tiny2DSimulationModels
+                                                     Tiny2DTestSupport)
+  tiny2d_enable_warnings(Tiny2DCsvExportTests)
+
+  add_test(NAME Tiny2DCsvExportTests COMMAND Tiny2DCsvExportTests)
+  set_tests_properties(Tiny2DCsvExportTests PROPERTIES TIMEOUT 30)
 
   add_executable(Tiny2DStackLabTests
       Sandbox/stack_lab_test.cc

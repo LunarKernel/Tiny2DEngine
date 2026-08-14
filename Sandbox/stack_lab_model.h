@@ -1,6 +1,7 @@
 #ifndef TINY2DENGINE_SANDBOX_STACK_LAB_MODEL_H_
 #define TINY2DENGINE_SANDBOX_STACK_LAB_MODEL_H_
 
+#include <string>
 #include <vector>
 
 #include "tiny2d_engine.h"
@@ -119,6 +120,19 @@ bool StepStack(const StackConfig& config, float delta_time, StackState* state);
 // query returns nullptr.
 const StackState* FindStackState(const std::vector<StackState>& history,
                                  double time_seconds);
+
+// Builds a versioned CSV export (tiny2d-csv format 1): metadata comment
+// lines carrying the product version, model id "V20 StackLab", every
+// StackConfig field by name, and the caller's status summary, then one
+// row per history sample. Columns are SI-suffixed; the time_s column is
+// each sample's stored time_seconds, never a uniform index interval.
+// Per-interface load columns are interface_load_<k>_n, bottom first,
+// box_count - 1 of them. Throws std::invalid_argument (producing no
+// output) when the config or any history sample is invalid.
+std::string BuildStackCsv(const StackConfig& config,
+                          const std::vector<StackState>& history,
+                          const std::string& product_version,
+                          const std::string& status);
 
 }  // namespace tiny2d::sandbox
 

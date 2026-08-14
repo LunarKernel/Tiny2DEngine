@@ -1,6 +1,7 @@
 #ifndef TINY2DENGINE_SANDBOX_CHAOS_LAB_MODEL_H_
 #define TINY2DENGINE_SANDBOX_CHAOS_LAB_MODEL_H_
 
+#include <string>
 #include <vector>
 
 #include "tiny2d_engine.h"
@@ -157,6 +158,21 @@ bool StepChaos(const ChaosConfig& config, float delta_time, ChaosState* state);
 // query returns nullptr.
 const ChaosState* FindChaosState(const std::vector<ChaosState>& history,
                                  double time_seconds);
+
+// Builds a versioned CSV export (tiny2d-csv format 1): metadata comment
+// lines carrying the product version, model id "V19 ChaosLab", every
+// ChaosConfig field by name, and the caller's status summary, then one
+// row per history sample. Columns are SI-suffixed (angles in radians,
+// clockwise-positive from straight down); the time_s column is each
+// sample's stored time_seconds, never a uniform index interval.
+// dissipated_energy_j and the rod forces come from the sample itself;
+// the remaining columns come from CalculateChaosDerived. Throws
+// std::invalid_argument (producing no output) when the config or any
+// history sample is invalid.
+std::string BuildChaosCsv(const ChaosConfig& config,
+                          const std::vector<ChaosState>& history,
+                          const std::string& product_version,
+                          const std::string& status);
 
 }  // namespace tiny2d::sandbox
 

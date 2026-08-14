@@ -5,6 +5,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "stack_lab_model.h"
@@ -14,6 +15,7 @@ namespace {
 
 using tiny2d::ContactCache;
 using tiny2d::Rectangle;
+using tiny2d::sandbox::BuildStackCsv;
 using tiny2d::sandbox::CalculateStackDerived;
 using tiny2d::sandbox::FindStackState;
 using tiny2d::sandbox::GetStackConfigError;
@@ -210,6 +212,85 @@ void TestValidationAndFailureAtomicity() {
   CHECK(GetStackStateError(config, bad_cache) != nullptr);
 }
 
+void TestCsvExportMetadataAndRows() {
+  const StackConfig config = MakeStackReferenceConfig();
+  StackState state = MakeInitialStackState(config);
+  // A deliberately non-uniform history: the time column must reproduce
+  // each sample's stored time, never a uniform index interval.
+  std::vector<StackState> history;
+  history.push_back(state);
+  for (int step = 1; step <= 480; ++step) {
+    CHECK(StepStack(config, kStackPhysicsStep, &state));
+    if (step == 7 || step == 96 || step == 480) {
+      history.push_back(state);
+    }
+  }
+
+  const std::string csv =
+      BuildStackCsv(config, history, "9.9.9-test", "UNIT TEST, status");
+  CHECK(BuildStackCsv(config, history, "9.9.9-test", "UNIT TEST, status") ==
+        csv);
+
+  std::vector<std::string> lines;
+  std::size_t start = 0;
+  while (start < csv.size()) {
+    const std::size_t end = csv.find('\n', start);
+    lines.push_back(csv.substr(start, end - start));
+    start = end + 1;
+  }
+  // 10 metadata lines (3 fixed + 6 params + status), the header, and one
+  // row per sample.
+  CHECK(lines.size() == 11 + history.size());
+  CHECK(lines[0] == "# tiny2d-csv 1");
+  CHECK(lines[1] == "# product_version: 9.9.9-test");
+  CHECK(lines[2] == "# model: V20 StackLab");
+  CHECK(lines[3] == "# param box_count: 10");
+  CHECK(lines[4] == "# param box_edge_m: 1");
+  CHECK(lines[5] == "# param box_mass_kg: 1");
+  CHECK(lines[6] == "# param friction: 0.600000024");
+  CHECK(lines[7] == "# param gravity_m_s2: 9.81000042");
+  CHECK(lines[8] == "# param lateral_offset_m: 0");
+  CHECK(lines[9] == "# status: UNIT TEST, status");
+
+  const std::string& header = lines[10];
+  CHECK(header.rfind("time_s,max_penetration_m,", 0) == 0);
+  const auto count_cells = [](const std::string& line) {
+    std::size_t cells = 1;
+    for (const char character : line) {
+      if (character == ',') {
+        ++cells;
+      }
+    }
+    return cells;
+  };
+  // 14 scalar columns plus box_count - 1 interface loads; no quoted
+  // cells appear in numeric rows, so counting commas is exact.
+  const std::size_t expected_columns =
+      14 + static_cast<std::size_t>(config.box_count) - 1;
+  CHECK(count_cells(header) == expected_columns);
+  CHECK(header.find("interface_load_0_n") != std::string::npos);
+  CHECK(header.find("interface_load_8_n") != std::string::npos);
+
+  for (std::size_t i = 0; i < history.size(); ++i) {
+    const std::string& row = lines[11 + i];
+    CHECK(count_cells(row) == expected_columns);
+    // The first cell round-trips the sample's exact stored time.
+    const double parsed = std::strtod(row.c_str(), nullptr);
+    CHECK(parsed == history[i].time_seconds);
+  }
+
+  // Invalid inputs reject atomically through the existing validation.
+  bool threw = false;
+  try {
+    StackConfig bad = config;
+    bad.box_count = 1;
+    BuildStackCsv(bad, history, "9.9.9-test", "status");
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
 void TestDriftSnapshotAndHistory() {
   const StackConfig config = MakeStackReferenceConfig();
   StackState state = MakeInitialStackState(config);
@@ -257,6 +338,7 @@ int main() {
                 TestCollapsePresetStaysFiniteAndDeterministic},
       NamedTest{"validation and failure atomicity",
                 TestValidationAndFailureAtomicity},
+      NamedTest{"csv export metadata and rows", TestCsvExportMetadataAndRows},
       NamedTest{"drift snapshot and history lookup",
                 TestDriftSnapshotAndHistory},
   };
