@@ -10,6 +10,7 @@
 
 #include "app/lab_shell.h"
 #include "chaos_lab_model.h"
+#include "plot_ui.h"
 #include "sim_ui.h"
 #include "simulations.h"
 
@@ -19,6 +20,49 @@ namespace {
 constexpr float kControlStart = 310.0f;
 constexpr float kSliderWidth = 310.0f;
 constexpr float kInputWidth = 110.0f;
+
+constexpr ChaosSeries kChaosSeriesOrder[] = {
+    ChaosSeries::kTheta1,           ChaosSeries::kTheta2,
+    ChaosSeries::kOmega1,           ChaosSeries::kOmega2,
+    ChaosSeries::kMechanicalEnergy, ChaosSeries::kSeparationDecades,
+    ChaosSeries::kAnchorRodForce,   ChaosSeries::kLinkRodForce,
+};
+constexpr int kChaosSeriesCount =
+    static_cast<int>(sizeof(kChaosSeriesOrder) / sizeof(kChaosSeriesOrder[0]));
+
+// Rebuilds the cached extraction only when the selection or the
+// recorded history changed (see SeriesCache).
+const std::vector<TimeSeriesPoint>& RefreshChaosSeries(
+    const ChaosConfig& config, const std::vector<ChaosState>& history,
+    int series_index, ui::SeriesCache* cache) {
+  const double last_time = history.empty() ? -1.0 : history.back().time_seconds;
+  if (cache->NeedsRebuild(series_index, history.size(), last_time)) {
+    cache->points =
+        ExtractChaosSeries(config, history, kChaosSeriesOrder[series_index]);
+    cache->MarkRebuilt(series_index, history.size(), last_time);
+  }
+  return cache->points;
+}
+
+void DrawChaosTimeSeries(const ChaosConfig& config,
+                         const std::vector<ChaosState>& history,
+                         double inspect_time, ui::TimeSeriesWindowState* state,
+                         ui::SeriesCache* primary_cache,
+                         ui::SeriesCache* secondary_cache) {
+  const char* labels[kChaosSeriesCount];
+  for (int i = 0; i < kChaosSeriesCount; ++i) {
+    labels[i] = GetChaosSeriesLabel(kChaosSeriesOrder[i]);
+  }
+  const std::vector<TimeSeriesPoint>& primary =
+      RefreshChaosSeries(config, history, state->primary_index, primary_cache);
+  const std::vector<TimeSeriesPoint>* secondary = nullptr;
+  if (state->compare) {
+    secondary = &RefreshChaosSeries(config, history, state->secondary_index,
+                                    secondary_cache);
+  }
+  ui::DrawTimeSeriesWindow("ChaosLab time series", labels, kChaosSeriesCount,
+                           state, primary, secondary, inspect_time);
+}
 constexpr float kRadiansToDegrees = 57.2957795131f;
 
 shell::SetupAction DrawSetupScreen(ChaosConfig* config) {
@@ -369,11 +413,17 @@ struct ChaosLabTraits {
         DrawMonitor(config, state, history, paused, inspect_time, follow_live,
                     error, &displayed_state, &export_status_);
     DrawChaosScene(config, displayed_state);
+    DrawChaosTimeSeries(config, history, *inspect_time, &plot_state_,
+                        &primary_cache_, &secondary_cache_);
     return stop;
   }
 
   // Result line of the last Export CSV click; persists across frames.
   std::string export_status_;
+  // Time-series window selection and extraction caches.
+  ui::TimeSeriesWindowState plot_state_;
+  ui::SeriesCache primary_cache_;
+  ui::SeriesCache secondary_cache_;
 };
 
 }  // namespace

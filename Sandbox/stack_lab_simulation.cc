@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "app/lab_shell.h"
+#include "plot_ui.h"
 #include "sim_ui.h"
 #include "simulations.h"
 #include "stack_lab_model.h"
@@ -19,6 +20,48 @@ namespace {
 constexpr float kControlStart = 310.0f;
 constexpr float kSliderWidth = 310.0f;
 constexpr float kInputWidth = 110.0f;
+
+constexpr StackSeries kStackSeriesOrder[] = {
+    StackSeries::kMeanSpeed,           StackSeries::kMaxSpeed,
+    StackSeries::kMechanicalEnergy,    StackSeries::kPenetrationFraction,
+    StackSeries::kBottomInterfaceLoad, StackSeries::kHeightError,
+};
+constexpr int kStackSeriesCount =
+    static_cast<int>(sizeof(kStackSeriesOrder) / sizeof(kStackSeriesOrder[0]));
+
+// Rebuilds the cached extraction only when the selection or the
+// recorded history changed (see SeriesCache).
+const std::vector<TimeSeriesPoint>& RefreshStackSeries(
+    const StackConfig& config, const std::vector<StackState>& history,
+    int series_index, ui::SeriesCache* cache) {
+  const double last_time = history.empty() ? -1.0 : history.back().time_seconds;
+  if (cache->NeedsRebuild(series_index, history.size(), last_time)) {
+    cache->points =
+        ExtractStackSeries(config, history, kStackSeriesOrder[series_index]);
+    cache->MarkRebuilt(series_index, history.size(), last_time);
+  }
+  return cache->points;
+}
+
+void DrawStackTimeSeries(const StackConfig& config,
+                         const std::vector<StackState>& history,
+                         double inspect_time, ui::TimeSeriesWindowState* state,
+                         ui::SeriesCache* primary_cache,
+                         ui::SeriesCache* secondary_cache) {
+  const char* labels[kStackSeriesCount];
+  for (int i = 0; i < kStackSeriesCount; ++i) {
+    labels[i] = GetStackSeriesLabel(kStackSeriesOrder[i]);
+  }
+  const std::vector<TimeSeriesPoint>& primary =
+      RefreshStackSeries(config, history, state->primary_index, primary_cache);
+  const std::vector<TimeSeriesPoint>* secondary = nullptr;
+  if (state->compare) {
+    secondary = &RefreshStackSeries(config, history, state->secondary_index,
+                                    secondary_cache);
+  }
+  ui::DrawTimeSeriesWindow("StackLab time series", labels, kStackSeriesCount,
+                           state, primary, secondary, inspect_time);
+}
 
 shell::SetupAction DrawSetupScreen(StackConfig* config) {
   ImGuiIO& io = ImGui::GetIO();
@@ -351,11 +394,17 @@ struct StackLabTraits {
         DrawMonitor(config, state, history, paused, inspect_time, follow_live,
                     error, &displayed_state, &export_status_);
     DrawStackScene(config, displayed_state);
+    DrawStackTimeSeries(config, history, *inspect_time, &plot_state_,
+                        &primary_cache_, &secondary_cache_);
     return stop;
   }
 
   // Result line of the last Export CSV click; persists across frames.
   std::string export_status_;
+  // Time-series window selection and extraction caches.
+  ui::TimeSeriesWindowState plot_state_;
+  ui::SeriesCache primary_cache_;
+  ui::SeriesCache secondary_cache_;
 };
 
 }  // namespace

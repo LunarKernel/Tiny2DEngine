@@ -75,6 +75,7 @@ if(TINY2D_BUILD_SANDBOX OR BUILD_TESTING)
       Sandbox/rolling_disk_model.cc
       Sandbox/rotation_pendulum_model.cc
       Sandbox/stack_lab_model.cc
+      Sandbox/time_series.cc
   )
 
   target_include_directories(Tiny2DSimulationModels PUBLIC
@@ -234,6 +235,17 @@ if(BUILD_TESTING)
   # runs (53 s measured in Debug), so it needs far more headroom than the
   # other suites, especially under AddressSanitizer.
   set_tests_properties(Tiny2DChaosLabTests PROPERTIES TIMEOUT 180)
+
+  add_executable(Tiny2DTimeSeriesTests
+      Sandbox/time_series_test.cc
+  )
+
+  target_link_libraries(Tiny2DTimeSeriesTests PRIVATE Tiny2DSimulationModels
+                                                      Tiny2DTestSupport)
+  tiny2d_enable_warnings(Tiny2DTimeSeriesTests)
+
+  add_test(NAME Tiny2DTimeSeriesTests COMMAND Tiny2DTimeSeriesTests)
+  set_tests_properties(Tiny2DTimeSeriesTests PROPERTIES TIMEOUT 30)
 
   add_executable(Tiny2DCsvExportTests
       Sandbox/csv_export_test.cc

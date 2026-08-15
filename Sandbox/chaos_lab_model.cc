@@ -507,6 +507,81 @@ const ChaosState* FindChaosState(const std::vector<ChaosState>& history,
              : &*next;
 }
 
+const char* GetChaosSeriesLabel(ChaosSeries series) {
+  switch (series) {
+    case ChaosSeries::kTheta1:
+      return "theta 1 (rad)";
+    case ChaosSeries::kTheta2:
+      return "theta 2 (rad)";
+    case ChaosSeries::kOmega1:
+      return "omega 1 (rad/s)";
+    case ChaosSeries::kOmega2:
+      return "omega 2 (rad/s)";
+    case ChaosSeries::kMechanicalEnergy:
+      return "mechanical energy (J)";
+    case ChaosSeries::kSeparationDecades:
+      return "separation (decades)";
+    case ChaosSeries::kAnchorRodForce:
+      return "anchor rod force (N)";
+    case ChaosSeries::kLinkRodForce:
+      return "link rod force (N)";
+  }
+  throw std::invalid_argument("Unknown ChaosLab series.");
+}
+
+std::vector<TimeSeriesPoint> ExtractChaosSeries(
+    const ChaosConfig& config, const std::vector<ChaosState>& history,
+    ChaosSeries series) {
+  GetChaosSeriesLabel(series);  // Rejects out-of-enum values.
+  if (const char* error = GetChaosConfigError(config)) {
+    throw std::invalid_argument(error);
+  }
+  std::vector<TimeSeriesPoint> points;
+  points.reserve(history.size());
+  for (const ChaosState& state : history) {
+    if (const char* error = GetChaosStateError(config, state)) {
+      throw std::invalid_argument(error);
+    }
+    double value = 0.0;
+    switch (series) {
+      case ChaosSeries::kAnchorRodForce:
+        value = state.anchor_rod_force_n;
+        break;
+      case ChaosSeries::kLinkRodForce:
+        value = state.link_rod_force_n;
+        break;
+      default: {
+        const ChaosDerived derived = CalculateChaosDerived(config, state);
+        switch (series) {
+          case ChaosSeries::kTheta1:
+            value = derived.theta_1_rad;
+            break;
+          case ChaosSeries::kTheta2:
+            value = derived.theta_2_rad;
+            break;
+          case ChaosSeries::kOmega1:
+            value = derived.omega_1_rad_s;
+            break;
+          case ChaosSeries::kOmega2:
+            value = derived.omega_2_rad_s;
+            break;
+          case ChaosSeries::kMechanicalEnergy:
+            value = derived.mechanical_energy_j;
+            break;
+          case ChaosSeries::kSeparationDecades:
+            value = derived.separation_decades;
+            break;
+          default:
+            break;
+        }
+        break;
+      }
+    }
+    points.push_back({state.time_seconds, value});
+  }
+  return points;
+}
+
 std::string BuildChaosCsv(const ChaosConfig& config,
                           const std::vector<ChaosState>& history,
                           const std::string& product_version,

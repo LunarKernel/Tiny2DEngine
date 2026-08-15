@@ -327,6 +327,61 @@ bool StepStack(const StackConfig& config, float delta_time, StackState* state) {
   return true;
 }
 
+const char* GetStackSeriesLabel(StackSeries series) {
+  switch (series) {
+    case StackSeries::kMeanSpeed:
+      return "mean speed (m/s)";
+    case StackSeries::kMaxSpeed:
+      return "max speed (m/s)";
+    case StackSeries::kMechanicalEnergy:
+      return "mechanical energy (J)";
+    case StackSeries::kPenetrationFraction:
+      return "penetration / edge";
+    case StackSeries::kBottomInterfaceLoad:
+      return "bottom interface load (N)";
+    case StackSeries::kHeightError:
+      return "height error (m)";
+  }
+  throw std::invalid_argument("Unknown StackLab series.");
+}
+
+std::vector<TimeSeriesPoint> ExtractStackSeries(
+    const StackConfig& config, const std::vector<StackState>& history,
+    StackSeries series) {
+  GetStackSeriesLabel(series);  // Rejects out-of-enum values.
+  if (const char* error = GetStackConfigError(config)) {
+    throw std::invalid_argument(error);
+  }
+  std::vector<TimeSeriesPoint> points;
+  points.reserve(history.size());
+  for (const StackState& state : history) {
+    const StackDerived derived = CalculateStackDerived(config, state);
+    double value = 0.0;
+    switch (series) {
+      case StackSeries::kMeanSpeed:
+        value = derived.mean_speed_mps;
+        break;
+      case StackSeries::kMaxSpeed:
+        value = derived.max_speed_mps;
+        break;
+      case StackSeries::kMechanicalEnergy:
+        value = derived.mechanical_energy_j;
+        break;
+      case StackSeries::kPenetrationFraction:
+        value = derived.max_penetration_fraction;
+        break;
+      case StackSeries::kBottomInterfaceLoad:
+        value = derived.interface_loads_n[0];
+        break;
+      case StackSeries::kHeightError:
+        value = derived.stack_height_error_m;
+        break;
+    }
+    points.push_back({state.time_seconds, value});
+  }
+  return points;
+}
+
 std::string BuildStackCsv(const StackConfig& config,
                           const std::vector<StackState>& history,
                           const std::string& product_version,

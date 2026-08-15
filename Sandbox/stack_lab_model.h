@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "time_series.h"
 #include "tiny2d_engine.h"
 
 namespace tiny2d::sandbox {
@@ -120,6 +121,29 @@ bool StepStack(const StackConfig& config, float delta_time, StackState* state);
 // query returns nullptr.
 const StackState* FindStackState(const std::vector<StackState>& history,
                                  double time_seconds);
+
+// Plottable StackLab quantities (ROADMAP section-12 time series).
+enum class StackSeries {
+  kMeanSpeed,
+  kMaxSpeed,
+  kMechanicalEnergy,
+  kPenetrationFraction,
+  kBottomInterfaceLoad,
+  kHeightError,
+};
+
+// Human-readable label with the SI unit. Throws std::invalid_argument
+// for a value outside the enum.
+const char* GetStackSeriesLabel(StackSeries series);
+
+// Extracts one series from the recorded history, keyed on each
+// sample's stored time (values via CalculateStackDerived; the bottom
+// interface load is interface_loads_n[0], which box_count >= 2
+// guarantees exists). Throws std::invalid_argument (producing no
+// output) when the config or any sample is invalid.
+std::vector<TimeSeriesPoint> ExtractStackSeries(
+    const StackConfig& config, const std::vector<StackState>& history,
+    StackSeries series);
 
 // Builds a versioned CSV export (tiny2d-csv format 1): metadata comment
 // lines carrying the product version, model id "V20 StackLab", every

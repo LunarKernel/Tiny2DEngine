@@ -18,9 +18,12 @@ using tiny2d::sandbox::BuildChaosCsv;
 using tiny2d::sandbox::CalculateChaosDerived;
 using tiny2d::sandbox::ChaosConfig;
 using tiny2d::sandbox::ChaosDerived;
+using tiny2d::sandbox::ChaosSeries;
 using tiny2d::sandbox::ChaosState;
+using tiny2d::sandbox::ExtractChaosSeries;
 using tiny2d::sandbox::FindChaosState;
 using tiny2d::sandbox::GetChaosConfigError;
+using tiny2d::sandbox::GetChaosSeriesLabel;
 using tiny2d::sandbox::GetChaosStateError;
 using tiny2d::sandbox::kChaosPhysicsStep;
 using tiny2d::sandbox::kChaosPivotXM;
@@ -420,6 +423,89 @@ void TestCsvExportMetadataAndRows() {
   CHECK(threw);
 }
 
+void TestSeriesExtraction() {
+  const ChaosConfig config = MakeChaosReferenceConfig();
+  ChaosState state = MakeInitialChaosState(config);
+  std::vector<ChaosState> history;
+  history.push_back(state);
+  for (int step = 1; step <= 96; ++step) {
+    CHECK(StepChaos(config, kChaosPhysicsStep, &state));
+    if (step % 24 == 0) {
+      history.push_back(state);
+    }
+  }
+
+  const ChaosSeries all_series[] = {
+      ChaosSeries::kTheta1,           ChaosSeries::kTheta2,
+      ChaosSeries::kOmega1,           ChaosSeries::kOmega2,
+      ChaosSeries::kMechanicalEnergy, ChaosSeries::kSeparationDecades,
+      ChaosSeries::kAnchorRodForce,   ChaosSeries::kLinkRodForce,
+  };
+  for (const ChaosSeries series : all_series) {
+    const char* label = GetChaosSeriesLabel(series);
+    CHECK(label != nullptr && label[0] != '\0');
+    const std::vector<tiny2d::sandbox::TimeSeriesPoint> points =
+        ExtractChaosSeries(config, history, series);
+    CHECK(points.size() == history.size());
+    for (std::size_t i = 0; i < points.size(); ++i) {
+      CHECK(points[i].time_s == history[i].time_seconds);
+      const ChaosDerived derived = CalculateChaosDerived(config, history[i]);
+      double expected = 0.0;
+      switch (series) {
+        case ChaosSeries::kTheta1:
+          expected = derived.theta_1_rad;
+          break;
+        case ChaosSeries::kTheta2:
+          expected = derived.theta_2_rad;
+          break;
+        case ChaosSeries::kOmega1:
+          expected = derived.omega_1_rad_s;
+          break;
+        case ChaosSeries::kOmega2:
+          expected = derived.omega_2_rad_s;
+          break;
+        case ChaosSeries::kMechanicalEnergy:
+          expected = derived.mechanical_energy_j;
+          break;
+        case ChaosSeries::kSeparationDecades:
+          expected = derived.separation_decades;
+          break;
+        case ChaosSeries::kAnchorRodForce:
+          expected = history[i].anchor_rod_force_n;
+          break;
+        case ChaosSeries::kLinkRodForce:
+          expected = history[i].link_rod_force_n;
+          break;
+      }
+      CHECK(points[i].value == expected);
+    }
+  }
+  // Rod forces are defined zero before the first step.
+  CHECK(ExtractChaosSeries(config, history, ChaosSeries::kAnchorRodForce)
+            .front()
+            .value == 0.0);
+  CHECK(std::string(GetChaosSeriesLabel(ChaosSeries::kSeparationDecades)) ==
+        "separation (decades)");
+
+  // Invalid inputs reject atomically.
+  bool threw = false;
+  try {
+    ChaosConfig bad = config;
+    bad.gravity_m_s2 = 0.0f;
+    ExtractChaosSeries(bad, history, ChaosSeries::kTheta1);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  CHECK(threw);
+  threw = false;
+  try {
+    ExtractChaosSeries(config, history, static_cast<ChaosSeries>(99));
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
 void TestHistoryLookup() {
   const ChaosConfig config = MakeChaosReferenceConfig();
   std::vector<ChaosState> history;
@@ -463,6 +549,7 @@ int main() {
       NamedTest{"validation and failure atomicity",
                 TestValidationAndFailureAtomicity},
       NamedTest{"csv export metadata and rows", TestCsvExportMetadataAndRows},
+      NamedTest{"series extraction", TestSeriesExtraction},
       NamedTest{"history lookup", TestHistoryLookup},
   };
   for (const NamedTest& test : tests) {

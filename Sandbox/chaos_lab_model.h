@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "time_series.h"
 #include "tiny2d_engine.h"
 
 namespace tiny2d::sandbox {
@@ -158,6 +159,31 @@ bool StepChaos(const ChaosConfig& config, float delta_time, ChaosState* state);
 // query returns nullptr.
 const ChaosState* FindChaosState(const std::vector<ChaosState>& history,
                                  double time_seconds);
+
+// Plottable ChaosLab quantities (ROADMAP section-12 time series).
+enum class ChaosSeries {
+  kTheta1,
+  kTheta2,
+  kOmega1,
+  kOmega2,
+  kMechanicalEnergy,
+  kSeparationDecades,
+  kAnchorRodForce,
+  kLinkRodForce,
+};
+
+// Human-readable label with the SI unit. Throws std::invalid_argument
+// for a value outside the enum.
+const char* GetChaosSeriesLabel(ChaosSeries series);
+
+// Extracts one series from the recorded history, keyed on each
+// sample's stored time (rod forces come from the state samples - zero
+// before the first step by definition - and the rest come from
+// CalculateChaosDerived). Throws std::invalid_argument (producing no
+// output) when the config or any sample is invalid.
+std::vector<TimeSeriesPoint> ExtractChaosSeries(
+    const ChaosConfig& config, const std::vector<ChaosState>& history,
+    ChaosSeries series);
 
 // Builds a versioned CSV export (tiny2d-csv format 1): metadata comment
 // lines carrying the product version, model id "V19 ChaosLab", every

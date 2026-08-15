@@ -33,11 +33,16 @@ inline std::string ExportCsvToWorkingDirectory(const std::string& slug,
     return "Export failed: local time unavailable.";
   }
   std::string name;
-  int attempt = 1;
-  do {
-    name = MakeCsvFileName(slug, stamp, attempt++);
-  } while (std::filesystem::exists(std::filesystem::path(name)) &&
-           attempt <= 99);
+  bool name_is_free = false;
+  for (int attempt = 1; attempt <= 99 && !name_is_free; ++attempt) {
+    name = MakeCsvFileName(slug, stamp, attempt);
+    name_is_free = !std::filesystem::exists(std::filesystem::path(name));
+  }
+  if (!name_is_free) {
+    // Never overwrite an existing export, even in the pathological
+    // 99-collision limit.
+    return "Export failed: too many name collisions.";
+  }
   std::string error;
   if (!WriteTextFile(name, csv, &error)) {
     return "Export failed: " + error;

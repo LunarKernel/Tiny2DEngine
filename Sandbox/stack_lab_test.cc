@@ -17,8 +17,10 @@ using tiny2d::ContactCache;
 using tiny2d::Rectangle;
 using tiny2d::sandbox::BuildStackCsv;
 using tiny2d::sandbox::CalculateStackDerived;
+using tiny2d::sandbox::ExtractStackSeries;
 using tiny2d::sandbox::FindStackState;
 using tiny2d::sandbox::GetStackConfigError;
+using tiny2d::sandbox::GetStackSeriesLabel;
 using tiny2d::sandbox::GetStackStateError;
 using tiny2d::sandbox::kStackDriftSnapshotSeconds;
 using tiny2d::sandbox::kStackPhysicsStep;
@@ -28,6 +30,7 @@ using tiny2d::sandbox::MakeStackOffsetConfig;
 using tiny2d::sandbox::MakeStackReferenceConfig;
 using tiny2d::sandbox::StackConfig;
 using tiny2d::sandbox::StackDerived;
+using tiny2d::sandbox::StackSeries;
 using tiny2d::sandbox::StackState;
 using tiny2d::sandbox::StepStack;
 
@@ -291,6 +294,81 @@ void TestCsvExportMetadataAndRows() {
   CHECK(threw);
 }
 
+void TestSeriesExtraction() {
+  const StackConfig config = MakeStackReferenceConfig();
+  StackState state = MakeInitialStackState(config);
+  std::vector<StackState> history;
+  history.push_back(state);
+  for (int step = 1; step <= 240; ++step) {
+    CHECK(StepStack(config, kStackPhysicsStep, &state));
+    if (step % 48 == 0) {
+      history.push_back(state);
+    }
+  }
+
+  const StackSeries all_series[] = {
+      StackSeries::kMeanSpeed,           StackSeries::kMaxSpeed,
+      StackSeries::kMechanicalEnergy,    StackSeries::kPenetrationFraction,
+      StackSeries::kBottomInterfaceLoad, StackSeries::kHeightError,
+  };
+  for (const StackSeries series : all_series) {
+    // Every member is labeled with an SI unit or ratio annotation.
+    const char* label = GetStackSeriesLabel(series);
+    CHECK(label != nullptr && label[0] != '\0');
+    const std::vector<tiny2d::sandbox::TimeSeriesPoint> points =
+        ExtractStackSeries(config, history, series);
+    CHECK(points.size() == history.size());
+    for (std::size_t i = 0; i < points.size(); ++i) {
+      CHECK(points[i].time_s == history[i].time_seconds);
+      const StackDerived derived = CalculateStackDerived(config, history[i]);
+      double expected = 0.0;
+      switch (series) {
+        case StackSeries::kMeanSpeed:
+          expected = derived.mean_speed_mps;
+          break;
+        case StackSeries::kMaxSpeed:
+          expected = derived.max_speed_mps;
+          break;
+        case StackSeries::kMechanicalEnergy:
+          expected = derived.mechanical_energy_j;
+          break;
+        case StackSeries::kPenetrationFraction:
+          expected = derived.max_penetration_fraction;
+          break;
+        case StackSeries::kBottomInterfaceLoad:
+          expected = derived.interface_loads_n[0];
+          break;
+        case StackSeries::kHeightError:
+          expected = derived.stack_height_error_m;
+          break;
+      }
+      CHECK(points[i].value == expected);
+    }
+  }
+  CHECK(std::string(GetStackSeriesLabel(StackSeries::kMeanSpeed)) ==
+        "mean speed (m/s)");
+  CHECK(std::string(GetStackSeriesLabel(StackSeries::kBottomInterfaceLoad)) ==
+        "bottom interface load (N)");
+
+  // Invalid inputs reject atomically.
+  bool threw = false;
+  try {
+    StackConfig bad = config;
+    bad.friction = -1.0f;
+    ExtractStackSeries(bad, history, StackSeries::kMeanSpeed);
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  CHECK(threw);
+  threw = false;
+  try {
+    ExtractStackSeries(config, history, static_cast<StackSeries>(99));
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  CHECK(threw);
+}
+
 void TestDriftSnapshotAndHistory() {
   const StackConfig config = MakeStackReferenceConfig();
   StackState state = MakeInitialStackState(config);
@@ -339,6 +417,7 @@ int main() {
       NamedTest{"validation and failure atomicity",
                 TestValidationAndFailureAtomicity},
       NamedTest{"csv export metadata and rows", TestCsvExportMetadataAndRows},
+      NamedTest{"series extraction", TestSeriesExtraction},
       NamedTest{"drift snapshot and history lookup",
                 TestDriftSnapshotAndHistory},
   };

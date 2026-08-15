@@ -1,6 +1,6 @@
 # Tiny2D Engine Developer Guide
 
-> Current experiment generation: V21 (unreleased) / Latest release: 2.0.0
+> Current experiment generation: V22 (unreleased) / Latest release: 2.0.0
 > (V10)<br>
 > C++17 · SDL2 · Dear ImGui · CMake + vcpkg
 
@@ -185,8 +185,9 @@ single-step evidence loop with replay) build directly on
 
 Shared utilities: `fixed_step_clock.h` (frame-time accumulation into fixed
 physics steps), `simulation_history.h` (bounded, decimating history append),
-and `sim_ui.h` (slider-plus-input widgets, arrow drawing, and the
-CSV-export-to-working-directory helper).
+`sim_ui.h` (slider-plus-input widgets, arrow drawing, and the
+CSV-export-to-working-directory helper), and `plot_ui.h` (the time-series
+window renderer and its per-lab extraction caches).
 
 ### CSV export (tiny2d-csv format 1)
 
@@ -207,7 +208,30 @@ Model-layer entry points `BuildStackCsv` and `BuildChaosCsv` are the two
 consumers (§3.4 threshold); each lab monitor's Export CSV button writes
 `<slug>_<yyyymmdd_hhmmss>.csv` into the process working directory,
 appending an `_<n>` attempt suffix instead of overwriting on a
-collision. Labs touched in the future should adopt the same writer.
+collision (exhausting all 99 attempts fails the export rather than
+overwrite). Labs touched in the future should adopt the same writer.
+
+### Time-series plotting (ROADMAP §12)
+
+`Sandbox/time_series.{h,cc}` is the UI-free plot mathematics:
+`BuildPlotGeometry` maps a series into pixel space through PADDED axis
+ranges (values pad 5% of the span, constants pad max(0.5, 5%|v|), and a
+degenerate single-point time range pads symmetrically so the first
+frame of every run is well-defined), keeps x proportional to each
+sample's STORED time per §12's compaction rule, flips y for ImGui
+(+y down), and downsamples with a per-column min/max envelope so
+single-sample spikes stay visible. `SelectNiceTicks` picks
+1/2/2.5/5-ladder axis ticks. Both throw `std::invalid_argument`
+atomically on invalid input and are deterministic.
+
+The labs expose typed series (`StackSeries`/`ChaosSeries` enums with
+labeled SI units and `Extract*Series` functions validated
+sample-by-sample against the derived telemetry); `plot_ui.h` renders
+the movable "Time series" window - one or two selectable curves
+(compare mode auto-scales each curve independently; the y ticks
+describe the primary), an inspect-time marker, and latest-value
+readouts - with extraction cached against (series, history size, last
+sample time).
 
 ## 5. The experiments
 
@@ -224,9 +248,10 @@ collision. Labs touched in the future should adopt the same writer.
 | V19 ChaosLab | Point-mass double pendulum on rod constraints with a shadow run | Small-angle normal modes (2%), 25-degree energy budget, rod drift, factor-1000 divergence from a 1e-4 rad offset |
 | V20 StackLab | Warm-started resting box stacks with live criteria telemetry | Per-interface loads = (n-k) m g (1% time-averaged; 0.000% measured), exact-zero resting speed on the aligned reference, offset stand-without-collapse |
 
-V21 is a cross-cutting measurement generation, not a lab: versioned CSV
-export (see section 4) for the StackLab and ChaosLab monitors, plus the
-engine's 2^20 cached-body bound from the V20 review's deferred notes.
+V21 and V22 are cross-cutting measurement generations, not labs:
+versioned CSV export and native time-series plotting (see section 4)
+for StackLab and ChaosLab, plus the engine's 2^20 cached-body bound
+from the V20 review's deferred notes.
 
 ## 6. Adding a lab
 
@@ -258,6 +283,6 @@ before pushing.
 
 `version-semver` in `vcpkg.json` is the single source of the product
 version; CMake and the window title derive from it, and CSV exports
-record it in their metadata. V-numbers (V9 through V21) name experiment
+record it in their metadata. V-numbers (V9 through V22) name experiment
 generations and never become semantic versions. Releases tag
 `v<version-semver>` and update `CHANGELOG.md`.

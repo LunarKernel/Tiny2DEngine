@@ -8,6 +8,19 @@ not product versions.
 
 ### Added
 
+- V22 time-series plotting: a UI-free plot-geometry core
+  (`Sandbox/time_series`, pixel mapping through padded axis ranges
+  keyed on stored sample times, per-column min/max envelope
+  downsampling that keeps single-sample spikes visible, and
+  1/2/2.5/5-ladder axis ticks) rendered through a movable "Time
+  series" ImGui window in the StackLab and ChaosLab labs: one or two
+  selectable curves with independent auto-scaling in compare mode, an
+  inspect-time marker, and latest-value readouts. Series extraction
+  lives in the lab models and is validated sample-by-sample against
+  the derived telemetry.
+- CSV export hardening: exhausting the 99 collision-name attempts now
+  fails with an error instead of overwriting the last candidate
+  (discharging the V21 review's deferred note).
 - V21 versioned CSV export: a shared UI-free writer
   (`Sandbox/csv_export`, tiny2d-csv format 1) with RFC-4180 escaping,
   round-trip numeric formatting (9 significant digits for floats, 17
