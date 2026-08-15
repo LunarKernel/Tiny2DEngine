@@ -1,5 +1,6 @@
 #include "time_series.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
