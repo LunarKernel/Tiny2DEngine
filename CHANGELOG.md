@@ -8,6 +8,17 @@ not product versions.
 
 ### Added
 
+- V23 history cursors: the time-series windows gained two cursors
+  that snap to recorded samples (nearest-by-time, ties to the earlier
+  sample), with slider controls, marked cursor lines, and a readout
+  of the values at A and B plus signed deltas (Delta t and Delta
+  value per visible curve). Snapping keeps every readout a true
+  recorded pair, never an interpolation; the cursor mathematics live
+  UI-free in `Sandbox/time_series` with the one-sample first-frame
+  case pinned by tests. Defensive hardening rides along (established
+  during review as invariant-pinning, not bug fixes: the guarded
+  corners are unreachable today): run-start cache and cursor resets,
+  and clamped series-label indexing.
 - V22 time-series plotting: a UI-free plot-geometry core
   (`Sandbox/time_series`, pixel mapping through padded axis ranges
   keyed on stored sample times, per-column min/max envelope

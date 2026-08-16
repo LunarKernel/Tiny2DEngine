@@ -13,6 +13,9 @@
 namespace {
 
 using tiny2d::sandbox::BuildPlotGeometry;
+using tiny2d::sandbox::ComputeCursorReadout;
+using tiny2d::sandbox::CursorReadout;
+using tiny2d::sandbox::FindNearestSeriesPoint;
 using tiny2d::sandbox::PlotGeometry;
 using tiny2d::sandbox::SelectNiceTicks;
 using tiny2d::sandbox::TimeSeriesPoint;
@@ -156,6 +159,70 @@ void TestGeometryRejectsInvalidInput() {
   expect_reject({{0.0, 1.0}}, std::numeric_limits<float>::quiet_NaN(), 100.0f);
 }
 
+void TestNearestPointSnapping() {
+  const std::vector<TimeSeriesPoint> points = {
+      {0.0, 10.0}, {1.0, 20.0}, {3.0, 30.0}};
+  // Clamping at both ends.
+  CHECK(FindNearestSeriesPoint(points, -5.0) == &points[0]);
+  CHECK(FindNearestSeriesPoint(points, 99.0) == &points[2]);
+  // Nearest selection and exact-midpoint ties to the earlier sample.
+  CHECK(FindNearestSeriesPoint(points, 0.4) == &points[0]);
+  CHECK(FindNearestSeriesPoint(points, 0.5) == &points[0]);
+  CHECK(FindNearestSeriesPoint(points, 0.6) == &points[1]);
+  CHECK(FindNearestSeriesPoint(points, 2.0) == &points[1]);
+  CHECK(FindNearestSeriesPoint(points, 2.1) == &points[2]);
+  // Exact sample times select that sample.
+  CHECK(FindNearestSeriesPoint(points, 1.0) == &points[1]);
+  // Empty and non-finite queries return nullptr.
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  CHECK(FindNearestSeriesPoint(points, nan) == nullptr);
+  CHECK(FindNearestSeriesPoint(
+            points, std::numeric_limits<double>::infinity()) == nullptr);
+  const std::vector<TimeSeriesPoint> empty;
+  CHECK(FindNearestSeriesPoint(empty, 1.0) == nullptr);
+}
+
+void TestCursorReadout() {
+  const std::vector<TimeSeriesPoint> points = {
+      {0.0, 10.0}, {1.0, 20.0}, {3.0, 30.0}};
+  CursorReadout readout;
+  CHECK(ComputeCursorReadout(points, 0.2, 2.9, &readout));
+  // Snapped values equal direct indexing; deltas are b minus a.
+  CHECK(readout.a.time_s == 0.0 && readout.a.value == 10.0);
+  CHECK(readout.b.time_s == 3.0 && readout.b.value == 30.0);
+  CHECK(readout.delta_time_s == 3.0);
+  CHECK(readout.delta_value == 20.0);
+  // B before A gives negative deltas.
+  CHECK(ComputeCursorReadout(points, 2.9, 0.2, &readout));
+  CHECK(readout.delta_time_s == -3.0);
+  CHECK(readout.delta_value == -20.0);
+  // The one-sample mandatory first-frame case: both cursors snap to
+  // the lone sample and every delta reads exactly zero.
+  const std::vector<TimeSeriesPoint> lone = {{2.0, 7.0}};
+  CHECK(ComputeCursorReadout(lone, -100.0, 100.0, &readout));
+  CHECK(readout.a.time_s == 2.0 && readout.b.time_s == 2.0);
+  CHECK(readout.a.value == 7.0 && readout.b.value == 7.0);
+  CHECK(readout.delta_time_s == 0.0 && readout.delta_value == 0.0);
+  // Rejections leave the output untouched.
+  CursorReadout sentinel;
+  sentinel.delta_value = 123.0;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const std::vector<TimeSeriesPoint> empty;
+  CHECK(!ComputeCursorReadout(empty, 0.0, 1.0, &sentinel));
+  CHECK(!ComputeCursorReadout(points, nan, 1.0, &sentinel));
+  CHECK(!ComputeCursorReadout(points, 0.0, nan, &sentinel));
+  CHECK(sentinel.delta_value == 123.0);
+  CHECK(!ComputeCursorReadout(points, 0.0, 1.0, nullptr));
+  // Determinism: equal inputs give equal readouts.
+  CursorReadout again;
+  CHECK(ComputeCursorReadout(points, 0.2, 2.9, &again));
+  CHECK(ComputeCursorReadout(points, 0.2, 2.9, &readout));
+  CHECK(again.a.time_s == readout.a.time_s &&
+        again.b.value == readout.b.value &&
+        again.delta_time_s == readout.delta_time_s &&
+        again.delta_value == readout.delta_value);
+}
+
 void TestNiceTicks() {
   // [0, 10] with target 5: the 1/2/2.5/5 ladder picks step 2 (10 / 2
   // = 5 steps fit the target), giving six ticks.
@@ -222,6 +289,8 @@ int main() {
       {"envelope downsampling keeps spike", TestEnvelopeDownsamplingKeepsSpike},
       {"empty input and determinism", TestEmptyInputAndDeterminism},
       {"geometry rejects invalid input", TestGeometryRejectsInvalidInput},
+      {"nearest point snapping", TestNearestPointSnapping},
+      {"cursor readout", TestCursorReadout},
       {"nice ticks", TestNiceTicks},
   };
   for (const NamedTest& test : tests) {

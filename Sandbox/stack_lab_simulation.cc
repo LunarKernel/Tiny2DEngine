@@ -368,6 +368,12 @@ struct StackLabTraits {
 
   Config MakeInitialConfig() { return MakeStackReferenceConfig(); }
   State MakeState(const Config& config) {
+    // Pins the fresh-per-run invariant: today each lab entry
+    // constructs new traits, so this reset has no observable effect;
+    // it guards any future refactor that reuses a traits object.
+    primary_cache_.Reset();
+    secondary_cache_.Reset();
+    plot_state_.ResetRunState();
     return MakeInitialStackState(config);
   }
   const char* InitialStateIssue(const Config&, const State&) { return nullptr; }

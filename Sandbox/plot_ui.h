@@ -4,10 +4,12 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <vector>
 
+#include "sim_ui.h"
 #include "time_series.h"
 
 namespace tiny2d::sandbox::ui {
@@ -18,6 +20,22 @@ struct TimeSeriesWindowState {
   int primary_index{0};
   bool compare{false};
   int secondary_index{1};
+  // Two history cursors: armed latches once, the first time the box
+  // is ticked with a non-empty primary series, and the defaults land
+  // on the recorded range ends at that moment.
+  bool cursors{false};
+  bool cursors_armed{false};
+  double cursor_a_s{0.0};
+  double cursor_b_s{0.0};
+
+  // Drops run-specific cursor state, keeping the series selection
+  // (user preference). Called from the labs' run-start path to pin
+  // the fresh-per-run invariant.
+  void ResetRunState() {
+    cursors_armed = false;
+    cursor_a_s = 0.0;
+    cursor_b_s = 0.0;
+  }
 };
 
 // One extracted series cached against the recorded history. A rebuild
@@ -37,6 +55,16 @@ struct SeriesCache {
     series_index = index;
     history_size = size;
     last_time_s = last_time;
+  }
+  // Returns the cache to its never-built state; part of the labs'
+  // run-start reset (defensive - today each lab entry constructs
+  // fresh traits, so this pins an invariant rather than fixing a
+  // reachable staleness).
+  void Reset() {
+    series_index = -1;
+    history_size = 0;
+    last_time_s = -1.0;
+    points.clear();
   }
 };
 
@@ -79,6 +107,8 @@ inline void DrawTimeSeriesWindow(const char* title,
   constexpr ImU32 kGridColor = IM_COL32(120, 130, 145, 60);
   constexpr ImU32 kBorderColor = IM_COL32(200, 210, 225, 180);
   constexpr ImU32 kLabelColor = IM_COL32(200, 208, 220, 255);
+  constexpr ImU32 kCursorAColor = IM_COL32(120, 230, 130, 210);
+  constexpr ImU32 kCursorBColor = IM_COL32(235, 120, 210, 210);
 
   const ImVec2 display_size = ImGui::GetIO().DisplaySize;
   ImGui::SetNextWindowPos({display_size.x - 392.0f, display_size.y - 330.0f},
@@ -89,6 +119,12 @@ inline void DrawTimeSeriesWindow(const char* title,
     return;
   }
 
+  // Defensive: persisted indices never index outside the label array,
+  // even if a caller's series count ever shrinks across frames.
+  state->primary_index = std::clamp(state->primary_index, 0, series_count - 1);
+  state->secondary_index =
+      std::clamp(state->secondary_index, 0, series_count - 1);
+
   ImGui::SetNextItemWidth(200.0f);
   ImGui::Combo("Series", &state->primary_index, series_labels, series_count);
   ImGui::SameLine();
@@ -98,6 +134,9 @@ inline void DrawTimeSeriesWindow(const char* title,
     ImGui::Combo("Second", &state->secondary_index, series_labels,
                  series_count);
   }
+  // Its own row: the Series row is already full at the default window
+  // width, and this row must render even with no samples yet.
+  ImGui::Checkbox("Cursors", &state->cursors);
   if (!primary.empty()) {
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kPrimaryColor),
                        "%s: %.6g", series_labels[state->primary_index],
@@ -107,6 +146,52 @@ inline void DrawTimeSeriesWindow(const char* title,
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kSecondaryColor),
                        "%s: %.6g", series_labels[state->secondary_index],
                        secondary->back().value);
+  }
+
+  // History cursors: armed once on the first tick with a non-empty
+  // series (defaults on the recorded ends at that moment; they do not
+  // track the growing range). The recorded range IS the primary
+  // series' endpoint pair - the extractors emit one point per sample.
+  bool cursor_readout_valid = false;
+  CursorReadout cursor_readout;
+  if (state->cursors && !primary.empty()) {
+    if (!state->cursors_armed) {
+      state->cursor_a_s = primary.front().time_s;
+      state->cursor_b_s = primary.back().time_s;
+      state->cursors_armed = true;
+    }
+    const double range_min = primary.front().time_s;
+    const double range_max = primary.back().time_s;
+    SliderInputDouble("Cursor A (s)", &state->cursor_a_s, range_min, range_max,
+                      "%.3f", 92.0f, 150.0f, 74.0f);
+    SliderInputDouble("Cursor B (s)", &state->cursor_b_s, range_min, range_max,
+                      "%.3f", 92.0f, 150.0f, 74.0f);
+    // A non-finite entry resets deterministically: A to the recorded
+    // start, B to the recorded end.
+    if (!std::isfinite(state->cursor_a_s)) {
+      state->cursor_a_s = range_min;
+    }
+    if (!std::isfinite(state->cursor_b_s)) {
+      state->cursor_b_s = range_max;
+    }
+    cursor_readout_valid = ComputeCursorReadout(
+        primary, state->cursor_a_s, state->cursor_b_s, &cursor_readout);
+    if (cursor_readout_valid) {
+      ImGui::Text("dt: %+.6g s", cursor_readout.delta_time_s);
+      ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kPrimaryColor),
+                         "A %.6g | B %.6g | delta %+.6g",
+                         cursor_readout.a.value, cursor_readout.b.value,
+                         cursor_readout.delta_value);
+      CursorReadout secondary_readout;
+      if (state->compare && secondary != nullptr && !secondary->empty() &&
+          ComputeCursorReadout(*secondary, state->cursor_a_s, state->cursor_b_s,
+                               &secondary_readout)) {
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kSecondaryColor),
+                           "A %.6g | B %.6g | delta %+.6g",
+                           secondary_readout.a.value, secondary_readout.b.value,
+                           secondary_readout.delta_value);
+      }
+    }
   }
 
   // Margins hold the tick labels: y labels left, time labels below.
@@ -173,6 +258,24 @@ inline void DrawTimeSeriesWindow(const char* title,
                                     time_span * plot_width);
   draw_list->AddLine({marker_x, origin.y}, {marker_x, origin.y + plot_height},
                      kMarkerColor, 1.2f);
+
+  if (cursor_readout_valid) {
+    // Cursor lines sit at the SNAPPED sample times, so the lines and
+    // the readout always describe the same recorded pair.
+    const auto cursor_x = [&](double snapped_time) {
+      return origin.x +
+             static_cast<float>((snapped_time - geometry.time_min_s) /
+                                time_span * plot_width);
+    };
+    const float a_x = cursor_x(cursor_readout.a.time_s);
+    const float b_x = cursor_x(cursor_readout.b.time_s);
+    draw_list->AddLine({a_x, origin.y}, {a_x, origin.y + plot_height},
+                       kCursorAColor, 1.4f);
+    draw_list->AddLine({b_x, origin.y}, {b_x, origin.y + plot_height},
+                       kCursorBColor, 1.4f);
+    draw_list->AddText({a_x + 2.0f, origin.y + 2.0f}, kCursorAColor, "A");
+    draw_list->AddText({b_x + 2.0f, origin.y + 2.0f}, kCursorBColor, "B");
+  }
 
   ImGui::End();
 }

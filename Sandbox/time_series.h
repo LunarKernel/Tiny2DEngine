@@ -42,6 +42,29 @@ struct PlotGeometry {
 PlotGeometry BuildPlotGeometry(const std::vector<TimeSeriesPoint>& points,
                                float width_px, float height_px);
 
+// Nearest sample by stored time, ties to the earlier sample (the same
+// convention as the labs' Find*State inspect lookup). Returns nullptr
+// on empty input or a non-finite query. Deterministic.
+const TimeSeriesPoint* FindNearestSeriesPoint(
+    const std::vector<TimeSeriesPoint>& points, double time_s);
+
+// Two-cursor readout over recorded samples: a and b are the snapped
+// samples themselves (never interpolated), deltas are b minus a.
+struct CursorReadout {
+  TimeSeriesPoint a;
+  TimeSeriesPoint b;
+  double delta_time_s{};
+  double delta_value{};
+};
+
+// Snaps both cursor times to the nearest recorded samples and fills
+// the readout. Returns false - leaving out untouched - on an empty
+// series, a non-finite cursor time, or a null out pointer. With one
+// recorded sample both cursors snap to it and every delta is zero.
+bool ComputeCursorReadout(const std::vector<TimeSeriesPoint>& points,
+                          double cursor_a_s, double cursor_b_s,
+                          CursorReadout* out);
+
 // Axis ticks on the 1/2/2.5/5 x 10^k ladder, clipped to [minimum,
 // maximum]: the smallest ladder step producing at most target_count
 // steps across the range, ticks at integer multiples of that step.

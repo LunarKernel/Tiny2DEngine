@@ -3,7 +3,7 @@
 - **Document status:** Proposal
 - **Project baseline:** V14 development line, based on the 2.0 release
 - **Target milestone:** Tiny2D Physics Lab 3.0
-- **Last updated:** 2026-08-15 (V22 delivered)
+- **Last updated:** 2026-08-16 (V23 delivered)
 
 ## 1. Purpose
 
@@ -124,6 +124,20 @@ The current development line contains ten independent experiment families:
   downsampling, single-point and rejection cases, tick exactness) plus
   `TestSeriesExtraction` in both lab suites (values equal the derived
   telemetry sample-by-sample).
+- **V23 history cursors (delivered):** the third §12 measurement
+  capability. The time-series windows gained two cursors that SNAP to
+  recorded samples (nearest-by-time, ties to the earlier sample - the
+  same convention as the inspect lookup), with slider controls, marked
+  cursor lines, and a readout of value-at-A, value-at-B, and signed
+  deltas (Delta t plus Delta value per visible curve; compare curves
+  read out in their own color against their own scale). Snapping means
+  every readout is a recorded value pair, never an interpolation. The
+  cursor mathematics (`FindNearestSeriesPoint`, `ComputeCursorReadout`)
+  are UI-free in `Sandbox/time_series` with the one-sample first-frame
+  case and rejection atomicity pinned by `Tiny2DTimeSeriesTests`. Also
+  hardened defensively (established during review: NOT bug fixes -
+  the corners were unreachable): run-start cache/cursor resets pin the
+  fresh-per-run invariant, and series-label indexing is clamped.
 
 The reusable engine provides rotating rectangular and circular bodies, SAT
 collision detection, one- and two-point contact manifolds with stable
@@ -170,10 +184,10 @@ The main limitations relevant to this roadmap are:
   factor, and offset amplitude; pair-fallback matching does not remove
   it). The recorded fix path is the §14 persistent-contact-manifolds
   trigger;
-- no history cursors or experiment file format; CSV export (V21) and
-  time-series plotting (V22) cover StackLab and ChaosLab, and the
-  other labs adopt the shared writer and plot window as they are next
-  touched;
+- no experiment file format; CSV export (V21), time-series plotting
+  (V22), and history cursors (V23) cover StackLab and ChaosLab, and
+  the other labs adopt the shared writer and plot window as they are
+  next touched;
 - no sleeping system (deliberately: a sleep threshold above the resting
   criterion would mask rather than solve).
 
@@ -428,7 +442,9 @@ The project SHOULD progressively add:
   **delivered in V22** for StackLab and ChaosLab with the native ImGui
   implementation the next paragraph prescribes;
 - two history cursors and differences such as $\Delta t$, $\Delta x$,
-  $\Delta v$, and $\Delta E$;
+  $\Delta v$, and $\Delta E$ — **delivered in V23** for StackLab and
+  ChaosLab (cursors snap to recorded samples; deltas cover the plotted
+  series, which include speeds, energies, angles, loads, and forces);
 - CSV export with real time, SI units, model identifier, product version,
   complete input parameters, and terminal status — **delivered in V21**
   for StackLab and ChaosLab (tiny2d-csv format 1; "terminal status" is
@@ -511,14 +527,14 @@ The project is ready for a formal 3.0 release when:
 
 ## 17. Recommended Next Action
 
-V15 through V22 are delivered (see §2); the §4 feature table is complete
-and the first two §12 measurement capabilities (versioned CSV export,
-time-series plotting) have landed. The next work SHOULD continue toward
-the **Physics Lab 3.0 release gate** (§16): the remaining §12
-capabilities (history cursors with delta readouts, the versioned
-experiment file, export and plot coverage for the remaining labs),
-packaging a Windows distribution that runs on a clean machine,
-release-version consistency across CMake, vcpkg, the window title, tag,
-and changelog, and an explicit license with release checksums. That
-work should be proposed and reviewed with the same contract-first
-discipline used by V15-V22.
+V15 through V23 are delivered (see §2); the §4 feature table is complete
+and three §12 measurement capabilities (versioned CSV export,
+time-series plotting, history cursors) have landed. The next work
+SHOULD continue toward the **Physics Lab 3.0 release gate** (§16): the
+remaining §12 capabilities (the versioned experiment file for save,
+load, and deterministic replay; event markers; export, plot, and
+cursor coverage for the remaining labs), packaging a Windows
+distribution that runs on a clean machine, release-version consistency
+across CMake, vcpkg, the window title, tag, and changelog, and an
+explicit license with release checksums. That work should be proposed
+and reviewed with the same contract-first discipline used by V15-V23.

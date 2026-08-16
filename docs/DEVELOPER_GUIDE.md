@@ -1,6 +1,6 @@
 # Tiny2D Engine Developer Guide
 
-> Current experiment generation: V22 (unreleased) / Latest release: 2.0.0
+> Current experiment generation: V23 (unreleased) / Latest release: 2.0.0
 > (V10)<br>
 > C++17 · SDL2 · Dear ImGui · CMake + vcpkg
 
@@ -233,6 +233,18 @@ describe the primary), an inspect-time marker, and latest-value
 readouts - with extraction cached against (series, history size, last
 sample time).
 
+V23 adds two history cursors to the same window: `FindNearestSeriesPoint`
+and `ComputeCursorReadout` (UI-free, in `time_series`) snap cursor
+times to recorded samples - nearest by time, ties to the earlier
+sample, matching the inspect lookup - so the A/B values and signed
+deltas (Delta t, Delta value per visible curve) always describe a true
+recorded pair. Armed defaults land once on the recorded range ends; a
+non-finite entry resets A to the range start and B to the range end;
+with one recorded sample both cursors snap to it and all deltas read
+zero. The run-start cache/cursor resets and the series-label index
+clamp are defensive invariant-pinning, not bug fixes (the guarded
+corners are unreachable while each lab entry constructs fresh traits).
+
 ## 5. The experiments
 
 | Lab | Physics | Analytical anchors |
@@ -248,10 +260,10 @@ sample time).
 | V19 ChaosLab | Point-mass double pendulum on rod constraints with a shadow run | Small-angle normal modes (2%), 25-degree energy budget, rod drift, factor-1000 divergence from a 1e-4 rad offset |
 | V20 StackLab | Warm-started resting box stacks with live criteria telemetry | Per-interface loads = (n-k) m g (1% time-averaged; 0.000% measured), exact-zero resting speed on the aligned reference, offset stand-without-collapse |
 
-V21 and V22 are cross-cutting measurement generations, not labs:
-versioned CSV export and native time-series plotting (see section 4)
-for StackLab and ChaosLab, plus the engine's 2^20 cached-body bound
-from the V20 review's deferred notes.
+V21 through V23 are cross-cutting measurement generations, not labs:
+versioned CSV export, native time-series plotting, and snap-to-sample
+history cursors (see section 4) for StackLab and ChaosLab, plus the
+engine's 2^20 cached-body bound from the V20 review's deferred notes.
 
 ## 6. Adding a lab
 
@@ -283,6 +295,6 @@ before pushing.
 
 `version-semver` in `vcpkg.json` is the single source of the product
 version; CMake and the window title derive from it, and CSV exports
-record it in their metadata. V-numbers (V9 through V22) name experiment
+record it in their metadata. V-numbers (V9 through V23) name experiment
 generations and never become semantic versions. Releases tag
 `v<version-semver>` and update `CHANGELOG.md`.

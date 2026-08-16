@@ -123,6 +123,45 @@ PlotGeometry BuildPlotGeometry(const std::vector<TimeSeriesPoint>& points,
   return geometry;
 }
 
+const TimeSeriesPoint* FindNearestSeriesPoint(
+    const std::vector<TimeSeriesPoint>& points, double time_s) {
+  if (points.empty() || !std::isfinite(time_s)) {
+    return nullptr;
+  }
+  const auto next =
+      std::lower_bound(points.begin(), points.end(), time_s,
+                       [](const TimeSeriesPoint& point, double target) {
+                         return point.time_s < target;
+                       });
+  if (next == points.begin()) {
+    return &points.front();
+  }
+  if (next == points.end()) {
+    return &points.back();
+  }
+  const auto previous = next - 1;
+  return time_s - previous->time_s <= next->time_s - time_s ? &*previous
+                                                            : &*next;
+}
+
+bool ComputeCursorReadout(const std::vector<TimeSeriesPoint>& points,
+                          double cursor_a_s, double cursor_b_s,
+                          CursorReadout* out) {
+  if (out == nullptr) {
+    return false;
+  }
+  const TimeSeriesPoint* a = FindNearestSeriesPoint(points, cursor_a_s);
+  const TimeSeriesPoint* b = FindNearestSeriesPoint(points, cursor_b_s);
+  if (a == nullptr || b == nullptr) {
+    return false;
+  }
+  out->a = *a;
+  out->b = *b;
+  out->delta_time_s = b->time_s - a->time_s;
+  out->delta_value = b->value - a->value;
+  return true;
+}
+
 std::vector<double> SelectNiceTicks(double minimum, double maximum,
                                     int target_count) {
   Require(std::isfinite(minimum) && std::isfinite(maximum) && maximum > minimum,
