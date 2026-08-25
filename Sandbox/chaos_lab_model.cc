@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "csv_export.h"
+#include "experiment_file.h"
 
 namespace tiny2d::sandbox {
 namespace {
@@ -505,6 +507,265 @@ const ChaosState* FindChaosState(const std::vector<ChaosState>& history,
                  next->time_seconds - time_seconds
              ? &*previous
              : &*next;
+}
+
+namespace {
+
+constexpr const char* kChaosModelId = "V19 ChaosLab";
+// Per-bob checkpoint key prefixes and suffixes, fixed order.
+constexpr const char* kChaosBobNames[] = {"bob1", "bob2", "shadow1", "shadow2"};
+constexpr const char* kChaosBobSuffixes[] = {"x_m", "y_m", "vx_mps", "vy_mps"};
+constexpr int kChaosBobCount =
+    static_cast<int>(sizeof(kChaosBobNames) / sizeof(kChaosBobNames[0]));
+constexpr int kChaosBobValueCount =
+    static_cast<int>(sizeof(kChaosBobSuffixes) / sizeof(kChaosBobSuffixes[0]));
+
+std::string ChaosBobKey(int bob, int component) {
+  return std::string(kChaosBobNames[bob]) + "_" + kChaosBobSuffixes[component];
+}
+
+const Circle& ChaosBobAt(const ChaosState& state, int bob) {
+  switch (bob) {
+    case 0:
+      return state.bob_1;
+    case 1:
+      return state.bob_2;
+    case 2:
+      return state.shadow_bob_1;
+    default:
+      return state.shadow_bob_2;
+  }
+}
+
+}  // namespace
+
+std::string SaveChaosExperiment(const ChaosConfig& config,
+                                const ChaosState& state,
+                                const std::string& product_version) {
+  if (const char* error = GetChaosStateError(config, state)) {
+    throw std::invalid_argument(error);
+  }
+  ExperimentFile file;
+  file.model_id = kChaosModelId;
+  file.product_version = product_version;
+  file.parameters = {
+      {"mass_1_kg", CsvFloat(config.mass_1_kg)},
+      {"mass_2_kg", CsvFloat(config.mass_2_kg)},
+      {"length_1_m", CsvFloat(config.length_1_m)},
+      {"length_2_m", CsvFloat(config.length_2_m)},
+      {"bob_radius_m", CsvFloat(config.bob_radius_m)},
+      {"initial_angle_1_deg", CsvFloat(config.initial_angle_1_deg)},
+      {"initial_angle_2_deg", CsvFloat(config.initial_angle_2_deg)},
+      {"initial_angular_velocity_1_rad_s",
+       CsvFloat(config.initial_angular_velocity_1_rad_s)},
+      {"initial_angular_velocity_2_rad_s",
+       CsvFloat(config.initial_angular_velocity_2_rad_s)},
+      {"gravity_m_s2", CsvFloat(config.gravity_m_s2)},
+      {"linear_damping_per_s", CsvFloat(config.linear_damping_per_s)},
+      {"shadow_offset_rad", CsvFloat(config.shadow_offset_rad)},
+  };
+  file.checkpoints.emplace_back("time_s", CsvDouble(state.time_seconds));
+  for (int bob = 0; bob < kChaosBobCount; ++bob) {
+    const Circle& circle = ChaosBobAt(state, bob);
+    const float values[kChaosBobValueCount] = {
+        circle.position.x, circle.position.y, circle.velocity.x,
+        circle.velocity.y};
+    for (int c = 0; c < kChaosBobValueCount; ++c) {
+      file.checkpoints.emplace_back(ChaosBobKey(bob, c), CsvFloat(values[c]));
+    }
+  }
+  file.checkpoints.emplace_back("dissipated_energy_j",
+                                CsvDouble(state.dissipated_energy_j));
+  file.checkpoints.emplace_back("anchor_rod_force_n",
+                                CsvFloat(state.anchor_rod_force_n));
+  file.checkpoints.emplace_back("link_rod_force_n",
+                                CsvFloat(state.link_rod_force_n));
+  return WriteExperiment(file);
+}
+
+bool LoadChaosExperiment(const std::string& text, ChaosConfig* out_config,
+                         ChaosCheckpoint* out_checkpoint,
+                         std::string* out_product_version, std::string* error) {
+  const auto fail = [&](const std::string& message) {
+    if (error != nullptr) {
+      *error = message;
+    }
+    return false;
+  };
+  if (out_config == nullptr || out_checkpoint == nullptr) {
+    return fail("Load targets are null.");
+  }
+  ExperimentFile file;
+  std::string parse_error;
+  if (!ParseExperiment(text, &file, &parse_error)) {
+    return fail(parse_error);
+  }
+  if (file.model_id != kChaosModelId) {
+    return fail("The file is not a ChaosLab experiment.");
+  }
+
+  ChaosConfig config;
+  bool seen[12] = {};
+  for (const auto& [key, value] : file.parameters) {
+    float* target = nullptr;
+    int slot = -1;
+    if (key == "mass_1_kg") {
+      target = &config.mass_1_kg;
+      slot = 0;
+    } else if (key == "mass_2_kg") {
+      target = &config.mass_2_kg;
+      slot = 1;
+    } else if (key == "length_1_m") {
+      target = &config.length_1_m;
+      slot = 2;
+    } else if (key == "length_2_m") {
+      target = &config.length_2_m;
+      slot = 3;
+    } else if (key == "bob_radius_m") {
+      target = &config.bob_radius_m;
+      slot = 4;
+    } else if (key == "initial_angle_1_deg") {
+      target = &config.initial_angle_1_deg;
+      slot = 5;
+    } else if (key == "initial_angle_2_deg") {
+      target = &config.initial_angle_2_deg;
+      slot = 6;
+    } else if (key == "initial_angular_velocity_1_rad_s") {
+      target = &config.initial_angular_velocity_1_rad_s;
+      slot = 7;
+    } else if (key == "initial_angular_velocity_2_rad_s") {
+      target = &config.initial_angular_velocity_2_rad_s;
+      slot = 8;
+    } else if (key == "gravity_m_s2") {
+      target = &config.gravity_m_s2;
+      slot = 9;
+    } else if (key == "linear_damping_per_s") {
+      target = &config.linear_damping_per_s;
+      slot = 10;
+    } else if (key == "shadow_offset_rad") {
+      target = &config.shadow_offset_rad;
+      slot = 11;
+    }
+    if (target == nullptr || !ParseExperimentFloat(value, target)) {
+      return fail("Unknown or malformed param: " + key);
+    }
+    seen[slot] = true;
+  }
+  for (const bool present : seen) {
+    if (!present) {
+      return fail("A ChaosLab param is missing.");
+    }
+  }
+  if (const char* config_error = GetChaosConfigError(config)) {
+    return fail(config_error);
+  }
+
+  ChaosCheckpoint checkpoint;
+  const std::size_t expected_count =
+      1 + static_cast<std::size_t>(kChaosBobCount) * kChaosBobValueCount + 3;
+  if (file.checkpoints.size() != expected_count) {
+    return fail("Checkpoint count mismatch.");
+  }
+  if (file.checkpoints[0].first != "time_s" ||
+      !ParseExperimentDouble(file.checkpoints[0].second, &checkpoint.time_s) ||
+      checkpoint.time_s < 0.0) {
+    return fail("Malformed checkpoint time.");
+  }
+  checkpoint.bob_values.reserve(static_cast<std::size_t>(kChaosBobCount) *
+                                kChaosBobValueCount);
+  std::size_t index = 1;
+  for (int bob = 0; bob < kChaosBobCount; ++bob) {
+    for (int c = 0; c < kChaosBobValueCount; ++c, ++index) {
+      float value = 0.0f;
+      if (file.checkpoints[index].first != ChaosBobKey(bob, c) ||
+          !ParseExperimentFloat(file.checkpoints[index].second, &value)) {
+        return fail("Malformed checkpoint: " + ChaosBobKey(bob, c));
+      }
+      checkpoint.bob_values.push_back(value);
+    }
+  }
+  if (file.checkpoints[index].first != "dissipated_energy_j" ||
+      !ParseExperimentDouble(file.checkpoints[index].second,
+                             &checkpoint.dissipated_energy_j)) {
+    return fail("Malformed checkpoint: dissipated_energy_j");
+  }
+  ++index;
+  if (file.checkpoints[index].first != "anchor_rod_force_n" ||
+      !ParseExperimentFloat(file.checkpoints[index].second,
+                            &checkpoint.anchor_rod_force_n)) {
+    return fail("Malformed checkpoint: anchor_rod_force_n");
+  }
+  ++index;
+  if (file.checkpoints[index].first != "link_rod_force_n" ||
+      !ParseExperimentFloat(file.checkpoints[index].second,
+                            &checkpoint.link_rod_force_n)) {
+    return fail("Malformed checkpoint: link_rod_force_n");
+  }
+
+  *out_config = config;
+  *out_checkpoint = std::move(checkpoint);
+  if (out_product_version != nullptr) {
+    *out_product_version = file.product_version;
+  }
+  return true;
+}
+
+const char* ReplayChaosExperiment(const ChaosConfig& config,
+                                  const ChaosCheckpoint& checkpoint) {
+  static char message[64];
+  if (GetChaosConfigError(config) != nullptr) {
+    return "Replay configuration is invalid.";
+  }
+  if (!std::isfinite(checkpoint.time_s) || checkpoint.time_s < 0.0) {
+    return "Checkpoint time must be finite and non-negative.";
+  }
+  if (checkpoint.bob_values.size() !=
+      static_cast<std::size_t>(kChaosBobCount) * kChaosBobValueCount) {
+    return "Checkpoint value count mismatch.";
+  }
+
+  ChaosState state = MakeInitialChaosState(config);
+  const int maximum_steps =
+      static_cast<int>(std::ceil(checkpoint.time_s / kChaosPhysicsStep)) + 2;
+  int steps = 0;
+  // Equality is checked before the first step, so a t=0 checkpoint
+  // verifies with zero steps; the exact double accumulation makes
+  // equality the correct termination test for shell-recorded times.
+  while (state.time_seconds != checkpoint.time_s) {
+    if (steps++ >= maximum_steps) {
+      return "Replay never reached the checkpoint time.";
+    }
+    if (!StepChaos(config, kChaosPhysicsStep, &state)) {
+      return "Replay step rejected.";
+    }
+  }
+  for (int bob = 0; bob < kChaosBobCount; ++bob) {
+    const Circle& circle = ChaosBobAt(state, bob);
+    const float actual[kChaosBobValueCount] = {
+        circle.position.x, circle.position.y, circle.velocity.x,
+        circle.velocity.y};
+    for (int c = 0; c < kChaosBobValueCount; ++c) {
+      const float expected =
+          checkpoint
+              .bob_values[static_cast<std::size_t>(bob) * kChaosBobValueCount +
+                          static_cast<std::size_t>(c)];
+      if (actual[c] != expected) {
+        std::snprintf(message, sizeof(message), "%s_%s mismatch",
+                      kChaosBobNames[bob], kChaosBobSuffixes[c]);
+        return message;
+      }
+    }
+  }
+  if (state.dissipated_energy_j != checkpoint.dissipated_energy_j) {
+    return "dissipated_energy_j mismatch";
+  }
+  if (state.anchor_rod_force_n != checkpoint.anchor_rod_force_n) {
+    return "anchor_rod_force_n mismatch";
+  }
+  if (state.link_rod_force_n != checkpoint.link_rod_force_n) {
+    return "link_rod_force_n mismatch";
+  }
+  return nullptr;
 }
 
 const char* GetChaosSeriesLabel(ChaosSeries series) {

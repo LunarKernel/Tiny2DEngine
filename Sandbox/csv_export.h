@@ -55,6 +55,11 @@ std::string MakeCsvFileName(const std::string& slug,
 bool WriteTextFile(const std::string& path, const std::string& content,
                    std::string* error);
 
+// Reads path's entire contents into content. Returns false and fills
+// error (when non-null) on failure; never throws.
+bool ReadTextFile(const std::string& path, std::string* content,
+                  std::string* error);
+
 }  // namespace tiny2d::sandbox
 
 #endif  // TINY2DENGINE_SANDBOX_CSV_EXPORT_H_

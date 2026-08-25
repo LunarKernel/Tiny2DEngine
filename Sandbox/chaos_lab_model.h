@@ -185,6 +185,45 @@ std::vector<TimeSeriesPoint> ExtractChaosSeries(
     const ChaosConfig& config, const std::vector<ChaosState>& history,
     ChaosSeries series);
 
+// Replay checkpoint parsed from a tiny2d-exp file: the save time, the
+// complete per-bob dynamic state (four floats per bob - x, y, vx, vy -
+// in bob1, bob2, shadow1, shadow2 order; bobs are fixed-rotation, so
+// this is complete), the dissipated energy, and both rod forces.
+struct ChaosCheckpoint {
+  double time_s{};
+  std::vector<float> bob_values;
+  double dissipated_energy_j{};
+  float anchor_rod_force_n{};
+  float link_rod_force_n{};
+};
+
+// Writes a tiny2d-exp format 1 document capturing the configuration
+// and the state's checkpoint values with round-trip formatting.
+// Throws std::invalid_argument (producing no output) when config or
+// state is invalid.
+std::string SaveChaosExperiment(const ChaosConfig& config,
+                                const ChaosState& state,
+                                const std::string& product_version);
+
+// Strict, failure-atomic load: parses text, requires model id
+// "V19 ChaosLab" and format 1, every ChaosConfig field exactly once
+// with no unknown keys, a valid configuration, and the checkpoint
+// keys complete and in the fixed order. False leaves every output
+// untouched and fills error. out_product_version (optional) receives
+// the file's version string so the UI can warn when it differs from
+// the running build's.
+bool LoadChaosExperiment(const std::string& text, ChaosConfig* out_config,
+                         ChaosCheckpoint* out_checkpoint,
+                         std::string* out_product_version, std::string* error);
+
+// Deterministic replay verification: re-runs the fixed-step
+// simulation from the initial state until time_seconds exactly equals
+// the checkpoint time (checked before the first step; bounded), then
+// compares every checkpoint value exactly. Returns nullptr on success
+// or a stable message naming the failure.
+const char* ReplayChaosExperiment(const ChaosConfig& config,
+                                  const ChaosCheckpoint& checkpoint);
+
 // Builds a versioned CSV export (tiny2d-csv format 1): metadata comment
 // lines carrying the product version, model id "V19 ChaosLab", every
 // ChaosConfig field by name, and the caller's status summary, then one

@@ -68,6 +68,7 @@ if(TINY2D_BUILD_SANDBOX OR BUILD_TESTING)
       Sandbox/chaos_lab_model.cc
       Sandbox/contact_lab_model.cc
       Sandbox/csv_export.cc
+      Sandbox/experiment_file.cc
       Sandbox/force_lab_model.cc
       Sandbox/impact_lab_model.cc
       Sandbox/incline_spring_model.cc
@@ -246,6 +247,18 @@ if(BUILD_TESTING)
 
   add_test(NAME Tiny2DTimeSeriesTests COMMAND Tiny2DTimeSeriesTests)
   set_tests_properties(Tiny2DTimeSeriesTests PROPERTIES TIMEOUT 30)
+
+  add_executable(Tiny2DExperimentFileTests
+      Sandbox/experiment_file_test.cc
+  )
+
+  target_link_libraries(Tiny2DExperimentFileTests
+      PRIVATE Tiny2DSimulationModels Tiny2DTestSupport
+  )
+  tiny2d_enable_warnings(Tiny2DExperimentFileTests)
+
+  add_test(NAME Tiny2DExperimentFileTests COMMAND Tiny2DExperimentFileTests)
+  set_tests_properties(Tiny2DExperimentFileTests PROPERTIES TIMEOUT 30)
 
   add_executable(Tiny2DCsvExportTests
       Sandbox/csv_export_test.cc

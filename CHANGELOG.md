@@ -8,6 +8,19 @@ not product versions.
 
 ### Added
 
+- V24 versioned experiment file: the tiny2d-exp format 1
+  (`Sandbox/experiment_file`, strict failure-atomic parsing with
+  round-trip value formats) captures the complete input configuration
+  plus a replay checkpoint holding the complete per-body dynamic
+  state. StackLab and ChaosLab run screens gained a Save experiment
+  button (collision-safe naming beside the CSV export); their setup
+  screens gained a filename input and Load experiment button that
+  applies a file atomically and warns when the file's product version
+  differs from the running build's. Replay verification re-runs the
+  deterministic fixed-step simulation to exact time equality and
+  compares every checkpoint value exactly; remaining state (the
+  stack's contact cache) is equal by determinism but not
+  independently compared.
 - V23 history cursors: the time-series windows gained two cursors
   that snap to recorded samples (nearest-by-time, ties to the earlier
   sample), with slider controls, marked cursor lines, and a readout

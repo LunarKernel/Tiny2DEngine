@@ -1,6 +1,6 @@
 # Tiny2D Engine
 
-> Product version: 2.0.0 / Latest generation: V23 (unreleased)<br>
+> Product version: 2.0.0 / Latest generation: V24 (unreleased)<br>
 > Language: C++17 · Graphics: SDL2 · UI: Dear ImGui · Build: CMake + vcpkg
 
 Tiny2D Engine is a small two-dimensional physics laboratory aimed at rigid
@@ -11,7 +11,7 @@ telemetry, history inspection, and quantities that can be checked against
 analytical solutions.
 
 Two numbering schemes coexist: `2.0.0` is the semantic product version
-(single-sourced from `vcpkg.json`); `V9` through `V23` are experiment
+(single-sourced from `vcpkg.json`); `V9` through `V24` are experiment
 generation codes, not product versions.
 
 ## Experiments
@@ -36,8 +36,10 @@ sample's stored time. V22 adds native time-series plotting to the same
 two labs: one or two selectable curves drawn from the recorded history
 with spike-preserving downsampling and an inspect-time marker. V23
 adds two history cursors that snap to recorded samples, with signed
-delta readouts per visible curve. The remaining labs adopt the shared
-writer and plot window as they are next touched.
+delta readouts per visible curve. V24 adds a versioned experiment file
+(tiny2d-exp format 1) for save, load, and deterministic replay
+verification against an exact per-body checkpoint. The remaining labs
+adopt the shared writers and windows as they are next touched.
 
 ## Build and test
 

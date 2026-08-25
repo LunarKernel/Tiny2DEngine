@@ -13,13 +13,16 @@
 
 namespace tiny2d::sandbox::ui {
 
-// Writes a lab's CSV export into the process working directory as
-// <slug>_<local timestamp>.csv, appending an _<n> attempt suffix
-// instead of overwriting on a name collision. Returns a one-line
-// status for the monitor: the written name on success, otherwise the
-// failure reason.
-inline std::string ExportCsvToWorkingDirectory(const std::string& slug,
-                                               const std::string& csv) {
+// Shared collision-safe write path for working-directory exports and
+// saves: name_builder maps (slug, timestamp, attempt) to a candidate
+// file name, success_verb prefixes the success status ("Exported" /
+// "Saved"), and failure_prefix prefixes every failure status. Never
+// overwrites an existing file, even in the pathological 99-collision
+// limit.
+inline std::string WriteExportToWorkingDirectory(
+    const std::string& slug, const std::string& content,
+    const char* success_verb, const char* failure_prefix,
+    std::string (*name_builder)(const std::string&, const std::string&, int)) {
   const std::time_t now = std::time(nullptr);
   std::tm local_time{};
 #ifdef _WIN32
@@ -30,24 +33,33 @@ inline std::string ExportCsvToWorkingDirectory(const std::string& slug,
   char stamp[20];
   if (!have_local_time ||
       std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &local_time) == 0) {
-    return "Export failed: local time unavailable.";
+    return std::string(failure_prefix) + "local time unavailable.";
   }
   std::string name;
   bool name_is_free = false;
   for (int attempt = 1; attempt <= 99 && !name_is_free; ++attempt) {
-    name = MakeCsvFileName(slug, stamp, attempt);
+    name = name_builder(slug, stamp, attempt);
     name_is_free = !std::filesystem::exists(std::filesystem::path(name));
   }
   if (!name_is_free) {
-    // Never overwrite an existing export, even in the pathological
-    // 99-collision limit.
-    return "Export failed: too many name collisions.";
+    return std::string(failure_prefix) + "too many name collisions.";
   }
   std::string error;
-  if (!WriteTextFile(name, csv, &error)) {
-    return "Export failed: " + error;
+  if (!WriteTextFile(name, content, &error)) {
+    return std::string(failure_prefix) + error;
   }
-  return "Exported " + name;
+  return std::string(success_verb) + " " + name;
+}
+
+// Writes a lab's CSV export into the process working directory as
+// <slug>_<local timestamp>.csv, appending an _<n> attempt suffix
+// instead of overwriting on a name collision. Returns a one-line
+// status for the monitor: the written name on success, otherwise the
+// failure reason.
+inline std::string ExportCsvToWorkingDirectory(const std::string& slug,
+                                               const std::string& csv) {
+  return WriteExportToWorkingDirectory(slug, csv, "Exported",
+                                       "Export failed: ", MakeCsvFileName);
 }
 
 inline bool SliderInputFloat(const char* label, float* value, float minimum,

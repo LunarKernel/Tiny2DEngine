@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "csv_export.h"
+#include "experiment_file.h"
 
 namespace tiny2d::sandbox {
 namespace {
@@ -325,6 +327,191 @@ bool StepStack(const StackConfig& config, float delta_time, StackState* state) {
   }
   *state = next;
   return true;
+}
+
+namespace {
+
+constexpr const char* kStackModelId = "V20 StackLab";
+// Per-box checkpoint key suffixes, fixed order.
+constexpr const char* kStackBoxSuffixes[] = {
+    "x_m", "y_m", "vx_mps", "vy_mps", "angle_rad", "omega_radps"};
+constexpr int kStackBoxValueCount =
+    static_cast<int>(sizeof(kStackBoxSuffixes) / sizeof(kStackBoxSuffixes[0]));
+
+std::string StackBoxKey(int box, int component) {
+  return "box" + std::to_string(box) + "_" + kStackBoxSuffixes[component];
+}
+
+}  // namespace
+
+std::string SaveStackExperiment(const StackConfig& config,
+                                const StackState& state,
+                                const std::string& product_version) {
+  if (const char* error = GetStackStateError(config, state)) {
+    throw std::invalid_argument(error);
+  }
+  ExperimentFile file;
+  file.model_id = kStackModelId;
+  file.product_version = product_version;
+  file.parameters = {
+      {"box_count", std::to_string(config.box_count)},
+      {"box_edge_m", CsvFloat(config.box_edge_m)},
+      {"box_mass_kg", CsvFloat(config.box_mass_kg)},
+      {"friction", CsvFloat(config.friction)},
+      {"gravity_m_s2", CsvFloat(config.gravity_m_s2)},
+      {"lateral_offset_m", CsvFloat(config.lateral_offset_m)},
+  };
+  file.checkpoints.emplace_back("time_s", CsvDouble(state.time_seconds));
+  for (int i = 0; i < config.box_count; ++i) {
+    const Rectangle& box = state.boxes[static_cast<std::size_t>(i)];
+    const float values[kStackBoxValueCount] = {
+        box.position.x, box.position.y, box.velocity.x,
+        box.velocity.y, box.angle,      box.angular_velocity};
+    for (int c = 0; c < kStackBoxValueCount; ++c) {
+      file.checkpoints.emplace_back(StackBoxKey(i, c), CsvFloat(values[c]));
+    }
+  }
+  return WriteExperiment(file);
+}
+
+bool LoadStackExperiment(const std::string& text, StackConfig* out_config,
+                         StackCheckpoint* out_checkpoint,
+                         std::string* out_product_version, std::string* error) {
+  const auto fail = [&](const std::string& message) {
+    if (error != nullptr) {
+      *error = message;
+    }
+    return false;
+  };
+  if (out_config == nullptr || out_checkpoint == nullptr) {
+    return fail("Load targets are null.");
+  }
+  ExperimentFile file;
+  std::string parse_error;
+  if (!ParseExperiment(text, &file, &parse_error)) {
+    return fail(parse_error);
+  }
+  if (file.model_id != kStackModelId) {
+    return fail("The file is not a StackLab experiment.");
+  }
+
+  // Every config field exactly once, no unknown keys (parse already
+  // rejected duplicates, so set-plus-count equality suffices).
+  StackConfig config;
+  bool seen[6] = {};
+  for (const auto& [key, value] : file.parameters) {
+    if (key == "box_count") {
+      if (!ParseExperimentInt(value, &config.box_count)) {
+        return fail("Malformed box_count value.");
+      }
+      seen[0] = true;
+    } else if (key == "box_edge_m" &&
+               ParseExperimentFloat(value, &config.box_edge_m)) {
+      seen[1] = true;
+    } else if (key == "box_mass_kg" &&
+               ParseExperimentFloat(value, &config.box_mass_kg)) {
+      seen[2] = true;
+    } else if (key == "friction" &&
+               ParseExperimentFloat(value, &config.friction)) {
+      seen[3] = true;
+    } else if (key == "gravity_m_s2" &&
+               ParseExperimentFloat(value, &config.gravity_m_s2)) {
+      seen[4] = true;
+    } else if (key == "lateral_offset_m" &&
+               ParseExperimentFloat(value, &config.lateral_offset_m)) {
+      seen[5] = true;
+    } else {
+      return fail("Unknown or malformed param: " + key);
+    }
+  }
+  for (const bool present : seen) {
+    if (!present) {
+      return fail("A StackLab param is missing.");
+    }
+  }
+  if (const char* config_error = GetStackConfigError(config)) {
+    return fail(config_error);
+  }
+
+  // Checkpoint keys complete and in the fixed order.
+  StackCheckpoint checkpoint;
+  const std::size_t expected_count =
+      1 + static_cast<std::size_t>(config.box_count) * kStackBoxValueCount;
+  if (file.checkpoints.size() != expected_count) {
+    return fail("Checkpoint count does not match box_count.");
+  }
+  if (file.checkpoints[0].first != "time_s" ||
+      !ParseExperimentDouble(file.checkpoints[0].second, &checkpoint.time_s) ||
+      checkpoint.time_s < 0.0) {
+    return fail("Malformed checkpoint time.");
+  }
+  checkpoint.values.reserve(expected_count - 1);
+  std::size_t index = 1;
+  for (int i = 0; i < config.box_count; ++i) {
+    for (int c = 0; c < kStackBoxValueCount; ++c, ++index) {
+      float value = 0.0f;
+      if (file.checkpoints[index].first != StackBoxKey(i, c) ||
+          !ParseExperimentFloat(file.checkpoints[index].second, &value)) {
+        return fail("Malformed checkpoint: " + StackBoxKey(i, c));
+      }
+      checkpoint.values.push_back(value);
+    }
+  }
+
+  *out_config = config;
+  *out_checkpoint = std::move(checkpoint);
+  if (out_product_version != nullptr) {
+    *out_product_version = file.product_version;
+  }
+  return true;
+}
+
+const char* ReplayStackExperiment(const StackConfig& config,
+                                  const StackCheckpoint& checkpoint) {
+  static char message[64];
+  if (GetStackConfigError(config) != nullptr) {
+    return "Replay configuration is invalid.";
+  }
+  if (!std::isfinite(checkpoint.time_s) || checkpoint.time_s < 0.0) {
+    return "Checkpoint time must be finite and non-negative.";
+  }
+  if (checkpoint.values.size() !=
+      static_cast<std::size_t>(config.box_count) * kStackBoxValueCount) {
+    return "Checkpoint value count mismatch.";
+  }
+
+  StackState state = MakeInitialStackState(config);
+  const int maximum_steps =
+      static_cast<int>(std::ceil(checkpoint.time_s / kStackPhysicsStep)) + 2;
+  int steps = 0;
+  // Equality is checked before the first step, so a t=0 checkpoint
+  // verifies with zero steps; the exact double accumulation makes
+  // equality the correct termination test for shell-recorded times.
+  while (state.time_seconds != checkpoint.time_s) {
+    if (steps++ >= maximum_steps) {
+      return "Replay never reached the checkpoint time.";
+    }
+    if (!StepStack(config, kStackPhysicsStep, &state)) {
+      return "Replay step rejected.";
+    }
+  }
+  for (int i = 0; i < config.box_count; ++i) {
+    const Rectangle& box = state.boxes[static_cast<std::size_t>(i)];
+    const float actual[kStackBoxValueCount] = {
+        box.position.x, box.position.y, box.velocity.x,
+        box.velocity.y, box.angle,      box.angular_velocity};
+    for (int c = 0; c < kStackBoxValueCount; ++c) {
+      const float expected =
+          checkpoint.values[static_cast<std::size_t>(i) * kStackBoxValueCount +
+                            static_cast<std::size_t>(c)];
+      if (actual[c] != expected) {
+        std::snprintf(message, sizeof(message), "box%d_%s mismatch", i,
+                      kStackBoxSuffixes[c]);
+        return message;
+      }
+    }
+  }
+  return nullptr;
 }
 
 const char* GetStackSeriesLabel(StackSeries series) {

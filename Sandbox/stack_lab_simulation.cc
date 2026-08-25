@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "app/lab_shell.h"
+#include "experiment_file.h"
 #include "plot_ui.h"
 #include "sim_ui.h"
 #include "simulations.h"
@@ -63,7 +64,56 @@ void DrawStackTimeSeries(const StackConfig& config,
                            state, primary, secondary, inspect_time);
 }
 
-shell::SetupAction DrawSetupScreen(StackConfig* config) {
+// Filename input and result line of the setup screen's experiment
+// loader; lives in the traits object so it persists across frames.
+struct ExperimentLoadUi {
+  char filename[128] = "stack_lab_";
+  std::string status;
+};
+
+void DrawExperimentLoadRow(StackConfig* config, ExperimentLoadUi* load_ui) {
+  ImGui::SetNextItemWidth(300.0f);
+  ImGui::InputText("##experiment_file", load_ui->filename,
+                   sizeof(load_ui->filename));
+  ImGui::SameLine();
+  if (ImGui::Button("Load experiment")) {
+    const std::string name = load_ui->filename;
+    std::string text;
+    std::string error;
+    StackConfig loaded;
+    StackCheckpoint checkpoint;
+    std::string file_version;
+    if (name.empty()) {
+      load_ui->status = "Enter a file name.";
+    } else if (name.find_first_of("/\\") != std::string::npos) {
+      load_ui->status = "File names must not contain path separators.";
+    } else if (!ReadTextFile(name, &text, &error)) {
+      load_ui->status = "Load failed: " + error;
+    } else if (!LoadStackExperiment(text, &loaded, &checkpoint, &file_version,
+                                    &error)) {
+      load_ui->status = "Load failed: " + error;
+    } else {
+      *config = loaded;
+      char summary[160];
+      std::snprintf(summary, sizeof(summary), "Loaded %s (checkpoint t=%.4f s)",
+                    name.c_str(), checkpoint.time_s);
+      load_ui->status = summary;
+      if (file_version != TINY2D_PRODUCT_VERSION) {
+        load_ui->status +=
+            " | file from product version " +
+            (file_version.empty() ? std::string("(unknown)") : file_version);
+      }
+    }
+  }
+  if (!load_ui->status.empty()) {
+    ImGui::TextWrapped("%s", load_ui->status.c_str());
+  } else {
+    ImGui::TextDisabled("Load a saved .exp file from the working directory.");
+  }
+}
+
+shell::SetupAction DrawSetupScreen(StackConfig* config,
+                                   ExperimentLoadUi* load_ui) {
   ImGuiIO& io = ImGui::GetIO();
   ImGui::SetNextWindowPos({0.0f, 0.0f});
   ImGui::SetNextWindowSize(io.DisplaySize);
@@ -80,7 +130,7 @@ shell::SetupAction DrawSetupScreen(StackConfig* config) {
       "live.");
   ImGui::Spacing();
 
-  ImGui::BeginChild("##stack_parameters", {0.0f, -94.0f}, false);
+  ImGui::BeginChild("##stack_parameters", {0.0f, -150.0f}, false);
   ImGui::TextUnformatted("Stack");
   ImGui::Separator();
   int box_count = config->box_count;
@@ -113,6 +163,8 @@ shell::SetupAction DrawSetupScreen(StackConfig* config) {
       "Solver: 16 iterations, warm-starting cache, slop min(2 mm, 0.2%% of "
       "the edge).");
   ImGui::EndChild();
+
+  DrawExperimentLoadRow(config, load_ui);
 
   const char* error = GetStackConfigError(*config);
   if (error == nullptr) {
@@ -324,7 +376,10 @@ bool DrawMonitor(const StackConfig& config, const StackState& current_state,
   const bool stop = ImGui::Button("Stop and choose model", {width, 36.0f});
 
   ImGui::BeginDisabled(history.empty());
-  if (ImGui::Button("Export CSV", {ImGui::GetContentRegionAvail().x, 30.0f})) {
+  const float export_width =
+      (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) *
+      0.5f;
+  if (ImGui::Button("Export CSV", {export_width, 30.0f})) {
     try {
       const StackDerived live = CalculateStackDerived(config, current_state);
       const int criteria_passing =
@@ -345,6 +400,19 @@ bool DrawMonitor(const StackConfig& config, const StackState& current_state,
           BuildStackCsv(config, history, TINY2D_PRODUCT_VERSION, full_status));
     } catch (const std::exception& exception) {
       *export_status = std::string("Export failed: ") + exception.what();
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Save experiment", {export_width, 30.0f})) {
+    try {
+      // The checkpoint captures the LIVE state, never the inspect
+      // cursor's displayed historical state.
+      *export_status = ui::WriteExportToWorkingDirectory(
+          "stack_lab",
+          SaveStackExperiment(config, current_state, TINY2D_PRODUCT_VERSION),
+          "Saved", "Save failed: ", MakeExperimentFileName);
+    } catch (const std::exception& exception) {
+      *export_status = std::string("Save failed: ") + exception.what();
     }
   }
   ImGui::EndDisabled();
@@ -389,7 +457,7 @@ struct StackLabTraits {
   }
   const char* AfterStepIssue(const State&) { return nullptr; }
   shell::SetupAction DrawSetup(Config* config, const std::string&) {
-    return DrawSetupScreen(config);
+    return DrawSetupScreen(config, &load_ui_);
   }
   bool DrawFrame(const Config& config, const State& state,
                  const std::vector<State>& history, bool* paused,
@@ -405,12 +473,15 @@ struct StackLabTraits {
     return stop;
   }
 
-  // Result line of the last Export CSV click; persists across frames.
+  // Result line of the last Export CSV or Save experiment click;
+  // persists across frames.
   std::string export_status_;
   // Time-series window selection and extraction caches.
   ui::TimeSeriesWindowState plot_state_;
   ui::SeriesCache primary_cache_;
   ui::SeriesCache secondary_cache_;
+  // Setup-screen experiment loader state.
+  ExperimentLoadUi load_ui_;
 };
 
 }  // namespace

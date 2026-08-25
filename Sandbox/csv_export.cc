@@ -2,7 +2,9 @@
 
 #include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
+#include <utility>
 
 namespace tiny2d::sandbox {
 namespace {
@@ -105,6 +107,33 @@ std::string MakeCsvFileName(const std::string& slug,
     name += "_" + std::to_string(attempt);
   }
   return name + ".csv";
+}
+
+bool ReadTextFile(const std::string& path, std::string* content,
+                  std::string* error) {
+  if (content == nullptr) {
+    if (error != nullptr) {
+      *error = "Read target is null.";
+    }
+    return false;
+  }
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream.is_open()) {
+    if (error != nullptr) {
+      *error = "Could not open '" + path + "' for reading.";
+    }
+    return false;
+  }
+  std::string text((std::istreambuf_iterator<char>(stream)),
+                   std::istreambuf_iterator<char>());
+  if (stream.bad()) {
+    if (error != nullptr) {
+      *error = "Reading '" + path + "' failed.";
+    }
+    return false;
+  }
+  *content = std::move(text);
+  return true;
 }
 
 bool WriteTextFile(const std::string& path, const std::string& content,

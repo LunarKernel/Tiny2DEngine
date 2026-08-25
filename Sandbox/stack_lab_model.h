@@ -145,6 +145,45 @@ std::vector<TimeSeriesPoint> ExtractStackSeries(
     const StackConfig& config, const std::vector<StackState>& history,
     StackSeries series);
 
+// Replay checkpoint parsed from a tiny2d-exp file: the save time and
+// the complete per-box dynamic state, six floats per box in box order
+// (x, y, vx, vy, angle, omega).
+struct StackCheckpoint {
+  double time_s{};
+  std::vector<float> values;
+};
+
+// Writes a tiny2d-exp format 1 document capturing the configuration
+// and the state's complete per-box dynamic state as the replay
+// checkpoint. Values use the round-trip formats, so loading
+// reproduces exact bits. Throws std::invalid_argument (producing no
+// output) when config or state is invalid.
+std::string SaveStackExperiment(const StackConfig& config,
+                                const StackState& state,
+                                const std::string& product_version);
+
+// Strict, failure-atomic load: parses text, requires model id
+// "V20 StackLab" and format 1, every StackConfig field exactly once
+// with no unknown keys, a valid configuration, and the checkpoint
+// keys complete and in the fixed order consistent with box_count.
+// False leaves every output untouched and fills error.
+// out_product_version (optional) receives the file's version string
+// so the UI can warn when it differs from the running build's.
+bool LoadStackExperiment(const std::string& text, StackConfig* out_config,
+                         StackCheckpoint* out_checkpoint,
+                         std::string* out_product_version, std::string* error);
+
+// Deterministic replay verification: re-runs the fixed-step
+// simulation from the initial state until time_seconds exactly equals
+// the checkpoint time (checked before the first step, so a t=0
+// checkpoint verifies with zero steps; bounded, so an unreachable
+// time fails cleanly), then compares every checkpoint value exactly.
+// Returns nullptr on success or a stable message naming the failure.
+// Remaining state (the contact cache) is equal by the engine's
+// determinism but is not independently compared.
+const char* ReplayStackExperiment(const StackConfig& config,
+                                  const StackCheckpoint& checkpoint);
+
 // Builds a versioned CSV export (tiny2d-csv format 1): metadata comment
 // lines carrying the product version, model id "V20 StackLab", every
 // StackConfig field by name, and the caller's status summary, then one

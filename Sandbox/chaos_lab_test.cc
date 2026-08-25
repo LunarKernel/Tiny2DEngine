@@ -16,6 +16,7 @@ namespace {
 using tiny2d::Circle;
 using tiny2d::sandbox::BuildChaosCsv;
 using tiny2d::sandbox::CalculateChaosDerived;
+using tiny2d::sandbox::ChaosCheckpoint;
 using tiny2d::sandbox::ChaosConfig;
 using tiny2d::sandbox::ChaosDerived;
 using tiny2d::sandbox::ChaosSeries;
@@ -28,11 +29,14 @@ using tiny2d::sandbox::GetChaosStateError;
 using tiny2d::sandbox::kChaosPhysicsStep;
 using tiny2d::sandbox::kChaosPivotXM;
 using tiny2d::sandbox::kChaosPivotYM;
+using tiny2d::sandbox::LoadChaosExperiment;
 using tiny2d::sandbox::MakeChaosDampedConfig;
 using tiny2d::sandbox::MakeChaosLargeAmplitudeConfig;
 using tiny2d::sandbox::MakeChaosReferenceConfig;
 using tiny2d::sandbox::MakeChaosSlowModeConfig;
 using tiny2d::sandbox::MakeInitialChaosState;
+using tiny2d::sandbox::ReplayChaosExperiment;
+using tiny2d::sandbox::SaveChaosExperiment;
 using tiny2d::sandbox::StepChaos;
 
 bool Near(double actual, double expected, double tolerance = 0.00001) {
@@ -506,6 +510,63 @@ void TestSeriesExtraction() {
   CHECK(threw);
 }
 
+void TestExperimentSaveLoadReplay() {
+  const ChaosConfig config = MakeChaosDampedConfig();
+  ChaosState state = MakeInitialChaosState(config);
+  for (int step = 1; step <= 480; ++step) {
+    CHECK(StepChaos(config, kChaosPhysicsStep, &state));
+  }
+  // The damped run has accumulated nonzero dissipated energy, so the
+  // double checkpoint field is exercised with a nontrivial value.
+  CHECK(state.dissipated_energy_j > 0.0);
+
+  const std::string text = SaveChaosExperiment(config, state, "9.9.9-test");
+  ChaosConfig loaded_config;
+  ChaosCheckpoint checkpoint;
+  std::string file_version;
+  std::string error;
+  CHECK(LoadChaosExperiment(text, &loaded_config, &checkpoint, &file_version,
+                            &error));
+  CHECK(file_version == "9.9.9-test");
+  CHECK(loaded_config.mass_1_kg == config.mass_1_kg);
+  CHECK(loaded_config.initial_angle_1_deg == config.initial_angle_1_deg);
+  CHECK(loaded_config.linear_damping_per_s == config.linear_damping_per_s);
+  CHECK(loaded_config.shadow_offset_rad == config.shadow_offset_rad);
+  CHECK(checkpoint.time_s == state.time_seconds);
+  CHECK(checkpoint.bob_values.size() == 16);
+  CHECK(checkpoint.bob_values[0] == state.bob_1.position.x);
+  CHECK(checkpoint.bob_values[7] == state.bob_2.velocity.y);
+  CHECK(checkpoint.dissipated_energy_j == state.dissipated_energy_j);
+  CHECK(checkpoint.anchor_rod_force_n == state.anchor_rod_force_n);
+  CHECK(checkpoint.link_rod_force_n == state.link_rod_force_n);
+
+  // Deterministic replay verifies, including the double and the rod
+  // forces.
+  CHECK(ReplayChaosExperiment(loaded_config, checkpoint) == nullptr);
+
+  // A corrupted per-bob value makes replay name that key.
+  ChaosCheckpoint corrupted = checkpoint;
+  corrupted.bob_values[2 * 4 + 1] += 0.5f;
+  CHECK(std::string(ReplayChaosExperiment(loaded_config, corrupted)) ==
+        "shadow1_y_m mismatch");
+  ChaosCheckpoint corrupted_energy = checkpoint;
+  corrupted_energy.dissipated_energy_j += 1.0;
+  CHECK(std::string(ReplayChaosExperiment(loaded_config, corrupted_energy)) ==
+        "dissipated_energy_j mismatch");
+
+  // A stack file is rejected by model id.
+  std::string wrong_model = text;
+  const std::string model_line = "# model: V19 ChaosLab";
+  wrong_model.replace(wrong_model.find(model_line), model_line.size(),
+                      "# model: V20 StackLab");
+  ChaosConfig untouched;
+  untouched.mass_1_kg = 123.0f;
+  CHECK(!LoadChaosExperiment(wrong_model, &untouched, &checkpoint, nullptr,
+                             &error));
+  CHECK(error == "The file is not a ChaosLab experiment.");
+  CHECK(untouched.mass_1_kg == 123.0f);
+}
+
 void TestHistoryLookup() {
   const ChaosConfig config = MakeChaosReferenceConfig();
   std::vector<ChaosState> history;
@@ -550,6 +611,8 @@ int main() {
                 TestValidationAndFailureAtomicity},
       NamedTest{"csv export metadata and rows", TestCsvExportMetadataAndRows},
       NamedTest{"series extraction", TestSeriesExtraction},
+      NamedTest{"experiment save, load, and replay",
+                TestExperimentSaveLoadReplay},
       NamedTest{"history lookup", TestHistoryLookup},
   };
   for (const NamedTest& test : tests) {

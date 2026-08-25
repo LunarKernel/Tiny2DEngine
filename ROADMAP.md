@@ -3,7 +3,7 @@
 - **Document status:** Proposal
 - **Project baseline:** V14 development line, based on the 2.0 release
 - **Target milestone:** Tiny2D Physics Lab 3.0
-- **Last updated:** 2026-08-16 (V23 delivered)
+- **Last updated:** 2026-08-26 (V24 delivered)
 
 ## 1. Purpose
 
@@ -138,6 +138,23 @@ The current development line contains ten independent experiment families:
   hardened defensively (established during review: NOT bug fixes -
   the corners were unreachable): run-start cache/cursor resets pin the
   fresh-per-run invariant, and series-label indexing is clamped.
+- **V24 versioned experiment file (delivered):** the fourth §12
+  measurement capability. The tiny2d-exp format 1
+  (`Sandbox/experiment_file`, strict failure-atomic parsing) captures
+  the complete input configuration plus a replay checkpoint holding
+  the complete per-body dynamic state in round-trip formats. Run
+  screens save `<slug>_<timestamp>.exp` beside the CSV export; setup
+  screens load a file back into the configuration (atomically, with a
+  warning when the file's product version differs from the running
+  build's). Replay verification re-runs the deterministic fixed-step
+  simulation to exact time equality and compares every checkpoint
+  value exactly - it compares exactly the listed values; remaining
+  state (the stack's contact cache; derived quantities) is equal by
+  the engine's determinism but is not independently compared.
+  Evidence: the `Tiny2DExperimentFileTests` suite plus
+  `TestExperimentSaveLoadReplay` in both lab suites (round-trip
+  exactness, successful and corrupted-value replays, t=0 zero-step
+  replay, model-id and unknown-key rejection).
 
 The reusable engine provides rotating rectangular and circular bodies, SAT
 collision detection, one- and two-point contact manifolds with stable
@@ -184,10 +201,10 @@ The main limitations relevant to this roadmap are:
   factor, and offset amplitude; pair-fallback matching does not remove
   it). The recorded fix path is the §14 persistent-contact-manifolds
   trigger;
-- no experiment file format; CSV export (V21), time-series plotting
-  (V22), and history cursors (V23) cover StackLab and ChaosLab, and
-  the other labs adopt the shared writer and plot window as they are
-  next touched;
+- the §12 measurement capabilities (CSV export V21, time-series
+  plotting V22, history cursors V23, the versioned experiment file
+  V24) cover StackLab and ChaosLab; the other labs adopt the shared
+  writers and windows as they are next touched;
 - no sleeping system (deliberately: a sleep threshold above the resting
   criterion would mask rather than solve).
 
@@ -450,7 +467,10 @@ The project SHOULD progressively add:
   for StackLab and ChaosLab (tiny2d-csv format 1; "terminal status" is
   recorded as the run state at export time, the only sensible reading
   for a live lab);
-- a versioned experiment file for save, load, and deterministic replay;
+- a versioned experiment file for save, load, and deterministic
+  replay — **delivered in V24** for StackLab and ChaosLab (tiny2d-exp
+  format 1; replay verification compares the complete per-body
+  checkpoint exactly, with the remaining state equal by determinism);
 - analytical value, simulated value, absolute error, and relative error;
 - event markers for collisions, rolling transition, loss of contact,
   extrema, and terminal states.
@@ -527,14 +547,15 @@ The project is ready for a formal 3.0 release when:
 
 ## 17. Recommended Next Action
 
-V15 through V23 are delivered (see §2); the §4 feature table is complete
-and three §12 measurement capabilities (versioned CSV export,
-time-series plotting, history cursors) have landed. The next work
-SHOULD continue toward the **Physics Lab 3.0 release gate** (§16): the
-remaining §12 capabilities (the versioned experiment file for save,
-load, and deterministic replay; event markers; export, plot, and
-cursor coverage for the remaining labs), packaging a Windows
-distribution that runs on a clean machine, release-version consistency
-across CMake, vcpkg, the window title, tag, and changelog, and an
-explicit license with release checksums. That work should be proposed
-and reviewed with the same contract-first discipline used by V15-V23.
+V15 through V24 are delivered (see §2); the §4 feature table is
+complete and all four core §12 measurement capabilities (versioned CSV
+export, time-series plotting, history cursors, the versioned
+experiment file) have landed for the two consumer labs. The next work
+SHOULD target the **Physics Lab 3.0 release gate** (§16) directly:
+packaging a Windows distribution that runs on a clean machine,
+release-version consistency across CMake, vcpkg, the window title,
+tag, and changelog, and an explicit license with release checksums -
+with the remaining §12 extras (event markers; measurement coverage for
+the other eight labs) taken opportunistically as labs are touched.
+That work should be proposed and reviewed with the same contract-first
+discipline used by V15-V24.

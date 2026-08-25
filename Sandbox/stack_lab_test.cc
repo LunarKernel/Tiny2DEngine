@@ -24,10 +24,14 @@ using tiny2d::sandbox::GetStackSeriesLabel;
 using tiny2d::sandbox::GetStackStateError;
 using tiny2d::sandbox::kStackDriftSnapshotSeconds;
 using tiny2d::sandbox::kStackPhysicsStep;
+using tiny2d::sandbox::LoadStackExperiment;
 using tiny2d::sandbox::MakeInitialStackState;
 using tiny2d::sandbox::MakeStackCollapseConfig;
 using tiny2d::sandbox::MakeStackOffsetConfig;
 using tiny2d::sandbox::MakeStackReferenceConfig;
+using tiny2d::sandbox::ReplayStackExperiment;
+using tiny2d::sandbox::SaveStackExperiment;
+using tiny2d::sandbox::StackCheckpoint;
 using tiny2d::sandbox::StackConfig;
 using tiny2d::sandbox::StackDerived;
 using tiny2d::sandbox::StackSeries;
@@ -369,6 +373,83 @@ void TestSeriesExtraction() {
   CHECK(threw);
 }
 
+void TestExperimentSaveLoadReplay() {
+  const StackConfig config = MakeStackOffsetConfig();
+  StackState state = MakeInitialStackState(config);
+  for (int step = 1; step <= 2 * 480; ++step) {
+    CHECK(StepStack(config, kStackPhysicsStep, &state));
+  }
+
+  const std::string text = SaveStackExperiment(config, state, "9.9.9-test");
+  StackConfig loaded_config;
+  StackCheckpoint checkpoint;
+  std::string file_version;
+  std::string error;
+  CHECK(LoadStackExperiment(text, &loaded_config, &checkpoint, &file_version,
+                            &error));
+  CHECK(error.empty());
+  CHECK(file_version == "9.9.9-test");
+  // Config field-exact.
+  CHECK(loaded_config.box_count == config.box_count);
+  CHECK(loaded_config.box_edge_m == config.box_edge_m);
+  CHECK(loaded_config.box_mass_kg == config.box_mass_kg);
+  CHECK(loaded_config.friction == config.friction);
+  CHECK(loaded_config.gravity_m_s2 == config.gravity_m_s2);
+  CHECK(loaded_config.lateral_offset_m == config.lateral_offset_m);
+  // Checkpoint value-exact against the saved state.
+  CHECK(checkpoint.time_s == state.time_seconds);
+  CHECK(checkpoint.values.size() ==
+        static_cast<std::size_t>(config.box_count) * 6);
+  CHECK(checkpoint.values[0] == state.boxes[0].position.x);
+  CHECK(checkpoint.values[5] == state.boxes[0].angular_velocity);
+
+  // Deterministic replay verifies.
+  CHECK(ReplayStackExperiment(loaded_config, checkpoint) == nullptr);
+
+  // A t=0 save (fresh initial state) replays with zero steps.
+  const StackState initial = MakeInitialStackState(config);
+  const std::string at_zero = SaveStackExperiment(config, initial, "v");
+  StackConfig zero_config;
+  StackCheckpoint zero_checkpoint;
+  CHECK(LoadStackExperiment(at_zero, &zero_config, &zero_checkpoint, nullptr,
+                            &error));
+  CHECK(ReplayStackExperiment(zero_config, zero_checkpoint) == nullptr);
+
+  // A corrupted checkpoint value makes replay name that key.
+  StackCheckpoint corrupted = checkpoint;
+  corrupted.values[2 * 6 + 0] += 0.25f;
+  CHECK(std::string(ReplayStackExperiment(loaded_config, corrupted)) ==
+        "box2_x_m mismatch");
+
+  // A corrupted param fails load atomically.
+  std::string bad_param = text;
+  const std::string friction_line = "param friction: ";
+  bad_param.replace(bad_param.find(friction_line) + friction_line.size(), 1,
+                    "x");
+  StackConfig untouched_config;
+  untouched_config.box_count = 3;
+  CHECK(!LoadStackExperiment(bad_param, &untouched_config, &checkpoint, nullptr,
+                             &error));
+  CHECK(!error.empty());
+  CHECK(untouched_config.box_count == 3);
+
+  // An unknown param key fails load.
+  std::string unknown_param = text;
+  unknown_param.insert(unknown_param.find("checkpoint time_s"),
+                       "param bogus: 3\n");
+  CHECK(!LoadStackExperiment(unknown_param, &untouched_config, &checkpoint,
+                             nullptr, &error));
+
+  // A chaos file is rejected by model id.
+  std::string wrong_model = text;
+  const std::string model_line = "# model: V20 StackLab";
+  wrong_model.replace(wrong_model.find(model_line), model_line.size(),
+                      "# model: V19 ChaosLab");
+  CHECK(!LoadStackExperiment(wrong_model, &untouched_config, &checkpoint,
+                             nullptr, &error));
+  CHECK(error == "The file is not a StackLab experiment.");
+}
+
 void TestDriftSnapshotAndHistory() {
   const StackConfig config = MakeStackReferenceConfig();
   StackState state = MakeInitialStackState(config);
@@ -418,6 +499,8 @@ int main() {
                 TestValidationAndFailureAtomicity},
       NamedTest{"csv export metadata and rows", TestCsvExportMetadataAndRows},
       NamedTest{"series extraction", TestSeriesExtraction},
+      NamedTest{"experiment save, load, and replay",
+                TestExperimentSaveLoadReplay},
       NamedTest{"drift snapshot and history lookup",
                 TestDriftSnapshotAndHistory},
   };

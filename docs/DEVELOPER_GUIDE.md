@@ -1,6 +1,6 @@
 # Tiny2D Engine Developer Guide
 
-> Current experiment generation: V23 (unreleased) / Latest release: 2.0.0
+> Current experiment generation: V24 (unreleased) / Latest release: 2.0.0
 > (V10)<br>
 > C++17 · SDL2 · Dear ImGui · CMake + vcpkg
 
@@ -245,6 +245,33 @@ zero. The run-start cache/cursor resets and the series-label index
 clamp are defensive invariant-pinning, not bug fixes (the guarded
 corners are unreachable while each lab entry constructs fresh traits).
 
+### Experiment files (tiny2d-exp format 1, ROADMAP §12)
+
+`Sandbox/experiment_file.{h,cc}` is the shared, UI-free document layer:
+`WriteExperiment` emits three `#` header lines (format version, product
+version, model id) followed by bare `param <name>: <value>` and
+`checkpoint <name>: <value>` lines - intentionally without the CSV's
+`#` prefix, since the whole file is data - and `ParseExperiment` is the
+strict, failure-atomic inverse (unknown lines, duplicate keys, missing
+headers, and unsupported format versions all reject with stable
+messages). Values use the round-trip formats, so loading reproduces
+exact bits.
+
+The labs layer on top: `Save*Experiment` captures the configuration
+and the LIVE state's complete per-body dynamic state as the replay
+checkpoint; `Load*Experiment` restores a configuration atomically
+(model id checked, every param exactly once, no unknown keys,
+checkpoint keys in fixed order) and returns the file's product version
+so the setup screen can warn when it differs from the running build's;
+`Replay*Experiment` re-runs the fixed-step simulation until
+`time_seconds` exactly equals the checkpoint time (sound because the
+shell only ever steps whole fixed steps, so a saved time is an exact
+N-fold double accumulation; equality is checked before the first step,
+so t=0 checkpoints verify with zero steps) and compares every
+checkpoint value exactly. The comparison covers exactly the checkpoint
+lists; remaining state (the stack's contact cache) is equal by the
+engine's determinism but is not independently compared.
+
 ## 5. The experiments
 
 | Lab | Physics | Analytical anchors |
@@ -260,10 +287,11 @@ corners are unreachable while each lab entry constructs fresh traits).
 | V19 ChaosLab | Point-mass double pendulum on rod constraints with a shadow run | Small-angle normal modes (2%), 25-degree energy budget, rod drift, factor-1000 divergence from a 1e-4 rad offset |
 | V20 StackLab | Warm-started resting box stacks with live criteria telemetry | Per-interface loads = (n-k) m g (1% time-averaged; 0.000% measured), exact-zero resting speed on the aligned reference, offset stand-without-collapse |
 
-V21 through V23 are cross-cutting measurement generations, not labs:
-versioned CSV export, native time-series plotting, and snap-to-sample
-history cursors (see section 4) for StackLab and ChaosLab, plus the
-engine's 2^20 cached-body bound from the V20 review's deferred notes.
+V21 through V24 are cross-cutting measurement generations, not labs:
+versioned CSV export, native time-series plotting, snap-to-sample
+history cursors, and the versioned experiment file (see section 4) for
+StackLab and ChaosLab, plus the engine's 2^20 cached-body bound from
+the V20 review's deferred notes.
 
 ## 6. Adding a lab
 
@@ -295,6 +323,7 @@ before pushing.
 
 `version-semver` in `vcpkg.json` is the single source of the product
 version; CMake and the window title derive from it, and CSV exports
-record it in their metadata. V-numbers (V9 through V23) name experiment
-generations and never become semantic versions. Releases tag
+record it in their metadata, as do experiment files. V-numbers (V9
+through V24) name experiment generations and never become semantic
+versions. Releases tag
 `v<version-semver>` and update `CHANGELOG.md`.
